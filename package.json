@@ -1,0 +1,22 @@
+{
+  "name": "whatsapp-ai-agent",
+  "version": "1.0.0",
+  "description": "WhatsApp AI Agent powered by Claude + Zernio API",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "tunnel": "npx ngrok http 3000",
+    "test": "node --test tests/*.test.js",
+    "test:webhook": "node src/test-webhook.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "openai": "^4.104.0"
+  }
+}

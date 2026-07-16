@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "hostinger-vps": {
+      "type": "local",
+      "command": [
+        "npx",
+        "--package=hostinger-api-mcp@latest",
+        "hostinger-vps-mcp"
+      ],
+      "env": {
+        "HOSTINGER_API_TOKEN": "{env:HOSTINGER_API_TOKEN}"
+      },
+      "enabled": true
+    }
+  }
+}
