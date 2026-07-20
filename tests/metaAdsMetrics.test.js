@@ -1,5 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {
+  DEFAULT_META_AD_ACCOUNT_ID,
+  hasMetaAdsActivity,
+  metaSpendInArs,
+  primaryMetaAdAccountId,
+  selectPrimaryMetaAdAccount,
+  shouldReplaceLegacyMetaAdsMetrics,
+} from "../src/metaAdsPolicy.js";
 
 function shiftDateKey(dateKey, days) {
   const date = new Date(`${dateKey}T00:00:00`);
@@ -93,4 +101,31 @@ test("recent tree fallback with non-zero spend should be persisted", () => {
     }),
     true
   );
+});
+
+test("Ofiprof USD is the only default Meta Ads account", () => {
+  const accounts = [
+    { id: "act_27791723490423883", name: "Ofiprof en pesos", currency: "ARS" },
+    { id: DEFAULT_META_AD_ACCOUNT_ID, name: "Ofiprof", currency: "USD" },
+  ];
+
+  assert.equal(primaryMetaAdAccountId({}), DEFAULT_META_AD_ACCOUNT_ID);
+  assert.deepEqual(selectPrimaryMetaAdAccount(accounts), accounts[1]);
+  assert.equal(selectPrimaryMetaAdAccount(accounts, "act_27791723490423883"), null);
+  assert.equal(selectPrimaryMetaAdAccount(accounts, "act_missing"), null);
+});
+
+test("USD spend uses the stored daily rate for financial calculations", () => {
+  assert.equal(metaSpendInArs({ spend: 100, currency: "USD", usdArsRate: 1550 }, 1600), 155000);
+  assert.equal(metaSpendInArs({ spend: 100, currency: "USD" }, 1600), 160000);
+  assert.equal(metaSpendInArs({ spend: 100, currency: "ARS", usdArsRate: 1550 }, 1600), 100);
+});
+
+test("legacy spend is removed only after a non-empty identified replacement", () => {
+  const legacy = { spend: 90, impressions: 1000 };
+  assert.equal(hasMetaAdsActivity(legacy), true);
+  assert.equal(shouldReplaceLegacyMetaAdsMetrics(legacy, { spend: 0, impressions: 0 }), false);
+  assert.equal(shouldReplaceLegacyMetaAdsMetrics(legacy, { spend: 91, impressions: 1100 }), true);
+  assert.equal(shouldReplaceLegacyMetaAdsMetrics({ spend: 0 }, { spend: 0 }), true);
+  assert.equal(shouldReplaceLegacyMetaAdsMetrics(legacy, null), false);
 });

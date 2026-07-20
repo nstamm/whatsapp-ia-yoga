@@ -9,9 +9,10 @@ import {
   getAIResponse,
   transcribeAudioFromUrl,
 } from "./claude.js";
-import { shouldRunCtwaBackfill } from "./ctwaBackfill.js";
+import { consumeInboxConversationPages, shouldRunCtwaBackfill } from "./ctwaBackfill.js";
 import { buildConversationFlow, validateFlowSettings } from "./conversationFlow.js";
 import { adminSectionDataNeeds, buildAdminConversationQuery, createAsyncTtlCache, isFreshTimestamp, isValidDateKey, mapWithConcurrency } from "./adminPerformance.js";
+import { DEFAULT_META_AD_ACCOUNT_NAME, hasMetaAdsActivity, metaSpendInArs, primaryMetaAdAccountId, selectPrimaryMetaAdAccount, shouldReplaceLegacyMetaAdsMetrics } from "./metaAdsPolicy.js";
 import { observeMetric, performanceSnapshot } from "./performanceMetrics.js";
 import {
   ensureWhatsAppDataset,
@@ -46,6 +47,7 @@ import {
   countConversationSummaries,
   listConversationSummaries,
   recordPayment,
+  reverseLatestPayment,
   listPayments,
   listCtwaHourlyStats,
   listCtwaAttributedPayments,
@@ -71,8 +73,11 @@ import {
   hasMaterialVideoBeenSent,
   getAdSpend,
   getMetaAdsDailyMetrics,
+  deleteMetaAdsDailyMetrics,
+  deleteUnassignedMetaAdsDailyMetrics,
   listAdSpendRange,
   listMetaAdsDailyMetricsRange,
+  listUnassignedMetaAdsMetrics,
   upsertAdSpend,
   upsertMetaAdsDailyMetrics,
   getMetaConversionEvent,
@@ -121,6 +126,7 @@ app.use((req, res, next) => {
 let cachedMetaAdsAccountId = "";
 let cachedPrimaryAdAccountId = "";
 let cachedPrimaryAdAccountCurrency = "";
+let cachedPrimaryAdAccountName = "";
 let latestAdsDashboard = null;
 const metaAdsRefreshes = new Map();
 let ctwaBackfillRequest = null;
@@ -474,6 +480,10 @@ function adminPath(req, options = {}) {
   if (options.from) params.set("from", options.from);
   if (options.to) params.set("to", options.to);
   if (options.date) params.set("date", options.date);
+  if (options.ctwaPages != null) params.set("ctwaPages", options.ctwaPages);
+  if (options.ctwaConversations != null) params.set("ctwaConversations", options.ctwaConversations);
+  if (options.ctwaAttributed != null) params.set("ctwaAttributed", options.ctwaAttributed);
+  if (options.ctwaErrors != null) params.set("ctwaErrors", options.ctwaErrors);
   if (options.convFilter) params.set("convFilter", options.convFilter);
   if (req.query.convFilter && !options.convFilter) params.set("convFilter", req.query.convFilter);
 
@@ -1104,22 +1114,29 @@ async function resolveMetaAdsAccountId() {
 }
 
 async function resolvePrimaryAdAccountId(accountId) {
-  if (process.env.META_PRIMARY_AD_ACCOUNT_ID) return process.env.META_PRIMARY_AD_ACCOUNT_ID;
-  if (cachedPrimaryAdAccountId) return cachedPrimaryAdAccountId;
+  const configuredId = primaryMetaAdAccountId();
+  if (cachedPrimaryAdAccountId === configuredId) return cachedPrimaryAdAccountId;
   if (!accountId || !process.env.ZERNIO_API_KEY) return "";
 
   try {
     const payload = await listMetaAdAccounts({ accountId, limit: 100 });
     const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
-    const match = accounts.find((account) => /en pesos/i.test(account.name ?? ""));
+    const configuredAccount = accounts.find((account) => String(account?.id ?? "").trim() === configuredId);
+    const match = selectPrimaryMetaAdAccount(accounts, configuredId);
 
     if (match?.id) {
       cachedPrimaryAdAccountId = match.id;
       cachedPrimaryAdAccountCurrency = match.currency || "";
+      cachedPrimaryAdAccountName = match.name || DEFAULT_META_AD_ACCOUNT_NAME;
       return cachedPrimaryAdAccountId;
     }
 
-    console.warn(`⚠️ No se encontró la cuenta "Ofiprof en pesos" entre ${accounts.length} cuentas Meta Ads. Verificá que exista en Meta.`);
+    if (configuredAccount?.id) {
+      console.warn(`⚠️ La cuenta Meta Ads ${configuredId} debe reportar en USD; Zernio informó ${configuredAccount.currency || "una moneda vacía"}.`);
+      return "";
+    }
+
+    console.warn(`⚠️ No se encontró la cuenta Meta Ads ${configuredId} (${DEFAULT_META_AD_ACCOUNT_NAME}) entre ${accounts.length} cuentas disponibles.`);
     return "";
   } catch (err) {
     console.warn(`⚠️ Error al buscar cuenta Meta Ads primaria:`, err.message);
@@ -1127,10 +1144,8 @@ async function resolvePrimaryAdAccountId(accountId) {
   }
 }
 
-function pickDefaultAdAccount(adAccounts = [], requestedId = "") {
-  if (requestedId) return requestedId;
-
-  return adAccounts.find((account) => /en pesos/i.test(account.name ?? ""))?.id ?? "";
+function pickDefaultAdAccount(adAccounts = []) {
+  return selectPrimaryMetaAdAccount(adAccounts)?.id ?? "";
 }
 
 function whatsAppConversionAccountId(contact = {}) {
@@ -1185,18 +1200,14 @@ function aggregateAdsTreeMetrics(payload) {
 }
 
 function isEmptyMetaAdsMetrics(metrics = {}) {
-  return !(
-    Number(metrics.spend) > 0 ||
-    Number(metrics.impressions) > 0 ||
-    Number(metrics.clicks) > 0 ||
-    Number(metrics.conversions) > 0 ||
-    Number(metrics.purchaseValue) > 0
-  );
+  return !hasMetaAdsActivity(metrics);
 }
 
 function unavailableMetaAdsMetrics(date, existing = null, reason = "missing_recent_meta_ads_data") {
   return {
     date,
+    adAccountId: existing?.adAccountId ?? primaryMetaAdAccountId(),
+    adAccountName: existing?.adAccountName ?? cachedPrimaryAdAccountName ?? DEFAULT_META_AD_ACCOUNT_NAME,
     accountId: existing?.accountId ?? "",
     spend: Number(existing?.spend) || 0,
     impressions: Number(existing?.impressions) || 0,
@@ -1205,6 +1216,7 @@ function unavailableMetaAdsMetrics(date, existing = null, reason = "missing_rece
     purchaseValue: Number(existing?.purchaseValue) || 0,
     roas: Number(existing?.roas) || 0,
     currency: existing?.currency ?? cachedPrimaryAdAccountCurrency ?? "",
+    usdArsRate: Number(existing?.usdArsRate) || 0,
     rawJson: existing?.rawJson ?? "",
     updatedAt: existing?.updatedAt ?? "",
     isUnavailable: true,
@@ -1214,7 +1226,8 @@ function unavailableMetaAdsMetrics(date, existing = null, reason = "missing_rece
 
 async function loadMetaAdsMetrics(date) {
   const dateKey = localDateKey(parseDateKey(date));
-  const existing = getMetaAdsDailyMetrics(dateKey);
+  const configuredAdAccountId = primaryMetaAdAccountId();
+  const existing = getMetaAdsDailyMetrics(dateKey, configuredAdAccountId);
 
   if (isFutureDateKey(dateKey)) {
     return unavailableMetaAdsMetrics(dateKey, existing, "future_date");
@@ -1225,6 +1238,7 @@ async function loadMetaAdsMetrics(date) {
 
   try {
     const adAccountId = await resolvePrimaryAdAccountId(accountId);
+    if (!adAccountId) return unavailableMetaAdsMetrics(dateKey, existing, "primary_ad_account_unavailable");
     const timeline = await getAdsTimeline({ accountId, adAccountId, fromDate: dateKey, toDate: dateKey });
     const dayMetrics = Array.isArray(timeline?.rows) ? timeline.rows.find((row) => row.date === dateKey) : null;
     const payload = dayMetrics ? timeline : await getMetaAdsTree({ accountId, date: dateKey, adAccountId, source: process.env.ZERNIO_META_ADS_SOURCE || "all" });
@@ -1246,11 +1260,15 @@ async function loadMetaAdsMetrics(date) {
     }
 
     upsertMetaAdsDailyMetrics(dateKey, {
+      adAccountId,
+      adAccountName: cachedPrimaryAdAccountName || DEFAULT_META_AD_ACCOUNT_NAME,
       accountId,
       ...metrics,
+      currency: metrics.currency || cachedPrimaryAdAccountCurrency,
+      usdArsRate: Math.max(1, Number(getSetting("usd_ars_rate", "1500")) || 1500),
       rawJson: payload,
     });
-    return getMetaAdsDailyMetrics(dateKey);
+    return getMetaAdsDailyMetrics(dateKey, adAccountId);
   } catch (err) {
     console.warn(`⚠️ Could not refresh Meta Ads metrics for ${dateKey}:`, err.message);
     return unavailableMetaAdsMetrics(dateKey, existing, "refresh_failed");
@@ -1263,26 +1281,40 @@ function metaAdsMetricsTtlMs(dateKey) {
 
 function refreshMetaAdsMetrics(date, options = {}) {
   const dateKey = localDateKey(parseDateKey(date));
-  const existing = getMetaAdsDailyMetrics(dateKey);
+  const adAccountId = primaryMetaAdAccountId();
+  const refreshKey = `${adAccountId}:${dateKey}`;
+  const existing = getMetaAdsDailyMetrics(dateKey, adAccountId);
   if (!options.force && existing && isFreshTimestamp(existing.updatedAt, metaAdsMetricsTtlMs(dateKey))) {
     return Promise.resolve(existing);
   }
-  if (metaAdsRefreshes.has(dateKey)) return metaAdsRefreshes.get(dateKey);
+  if (metaAdsRefreshes.has(refreshKey)) return metaAdsRefreshes.get(refreshKey);
 
-  const request = loadMetaAdsMetrics(dateKey).finally(() => metaAdsRefreshes.delete(dateKey));
-  metaAdsRefreshes.set(dateKey, request);
+  const request = loadMetaAdsMetrics(dateKey).finally(() => metaAdsRefreshes.delete(refreshKey));
+  metaAdsRefreshes.set(refreshKey, request);
   return request;
 }
 
-function metaSpendInArs(metaMetrics, usdArsRate = 1500) {
-  if (metaMetrics?.isUnavailable) return 0;
+async function refreshMetaAdsMetricsRange(fromDate, toDate, options = {}) {
+  const dates = dateRangeKeys(fromDate, toDate).slice(-90);
+  return mapWithConcurrency(dates, 4, (date) => refreshMetaAdsMetrics(date, options));
+}
 
-  const spend = Number(metaMetrics?.spend) || 0;
-  const currency = String(metaMetrics?.currency ?? cachedPrimaryAdAccountCurrency ?? "").toUpperCase();
+async function refreshLegacyMetaAdsMetrics() {
+  const legacyRows = listUnassignedMetaAdsMetrics();
+  if (!legacyRows.length) return [];
 
-  if (spend <= 0) return 0;
-  if (currency === "USD") return spend * usdArsRate;
-  return spend;
+  return mapWithConcurrency(legacyRows, 4, async (legacy) => {
+    await refreshMetaAdsMetrics(legacy.date, { force: true });
+    const adAccountId = primaryMetaAdAccountId();
+    const replacement = getMetaAdsDailyMetrics(legacy.date, adAccountId);
+    if (!replacement) return;
+
+    if (shouldReplaceLegacyMetaAdsMetrics(legacy, replacement)) {
+      deleteUnassignedMetaAdsDailyMetrics(legacy.date);
+    } else {
+      deleteMetaAdsDailyMetrics(legacy.date, adAccountId);
+    }
+  });
 }
 
 function effectiveAdSpend(manualSpend, metaMetrics, usdArsRate = 1500) {
@@ -1692,7 +1724,7 @@ function buildAdsRecommendations(adRows = [], monthlyRows = [], hourly = {}) {
   const recommendations = [];
 
   if (winner) recommendations.push(`Escalar primero: ${winner.name ?? "anuncio"}. Score ${winner.winnerScore}, ${winner.crmSales} ventas, ROAS cohorte ${formatMultiple(winner.realRoas)}.`);
-  if (loser) recommendations.push(`Reducir riesgo: ${loser.name ?? "anuncio"} gastó ${formatMoney(Math.round(loser.spendArs))} sin ventas CRM. Pausar o bajar presupuesto antes de subir puja.`);
+  if (loser) recommendations.push(`Reducir riesgo: ${loser.name ?? "anuncio"} gastó ${formatAdMoney(loser.spend, loser.currency)} sin ventas CRM. Pausar o bajar presupuesto antes de subir puja.`);
   if (bestHour) recommendations.push(`Franja con mejor señal: ${bestHour.label} hora Argentina. Concentrar tests y presupuesto ahí; confianza ${hourly.confidence}.`);
   if (!recommendations.length) recommendations.push("Todavía falta volumen para una recomendación fuerte. Mantener presupuesto controlado y juntar más ventas atribuidas.");
 
@@ -1704,12 +1736,12 @@ async function buildAdsDashboard(req) {
   const range = adsPresetRange(req.query.adsPreset ?? "today");
   const fromDate = range.fromDate;
   const toDate = range.toDate;
-  const requestedAdAccountId = String(req.query.adAccountId ?? "").trim();
+  const configuredAdAccountId = primaryMetaAdAccountId();
 
   const empty = {
     accountId,
     adAccounts: [],
-    selectedAdAccountId: requestedAdAccountId,
+    selectedAdAccountId: configuredAdAccountId,
     preset: range.preset,
     presetLabel: range.label,
     fromDate,
@@ -1736,15 +1768,13 @@ async function buildAdsDashboard(req) {
   try {
     const adAccountsPayload = await listMetaAdAccounts({ accountId, limit: 100 });
     const adAccounts = Array.isArray(adAccountsPayload?.accounts) ? adAccountsPayload.accounts : [];
-    const selectedAdAccountId = pickDefaultAdAccount(adAccounts, requestedAdAccountId);
+    const selectedAdAccountId = pickDefaultAdAccount(adAccounts);
 
     if (!selectedAdAccountId) {
-      return { ...empty, error: "No se encontró la cuenta 'Ofiprof en pesos'. Verificá que esté activa en Meta Ads." };
+      return { ...empty, error: `No se encontró la cuenta '${DEFAULT_META_AD_ACCOUNT_NAME}' (${configuredAdAccountId}). Verificá que esté activa en Meta Ads.` };
     }
 
-    const selectedAccounts = selectedAdAccountId === "all"
-      ? adAccounts
-      : adAccounts.filter((account) => account.id === selectedAdAccountId);
+    const selectedAccounts = adAccounts.filter((account) => account.id === selectedAdAccountId);
     const rowsByCurrency = new Map();
 
     const timelines = await mapWithConcurrency(selectedAccounts, 4, async (adAccount) => ({
@@ -1763,7 +1793,7 @@ async function buildAdsDashboard(req) {
     const totalsByCurrency = [...rowsByCurrency.entries()].map(([currency, rows]) => ({ currency, rows, totals: sumAdsRows(rows) }));
     const tree = await getMetaAdsTree({
       accountId,
-      adAccountId: selectedAdAccountId === "all" ? "" : selectedAdAccountId,
+      adAccountId: selectedAdAccountId,
       fromDate,
       toDate,
       source: process.env.ZERNIO_META_ADS_SOURCE || "all",
@@ -1780,7 +1810,7 @@ async function buildAdsDashboard(req) {
     const hourlyInsights = buildHourlyInsights(listCtwaHourlyStats({ from: fromDate, to: toDate }));
     const recommendations = buildAdsRecommendations(adRows, adRows, hourlyInsights);
 
-    latestAdsDashboard = { ...empty, selectedAdAccountId, adAccounts, rows: allRows, totalsByCurrency, campaigns, adRows, monthlyAdRows: adRows, monthRange: periodRange, hourlyInsights, recommendations, totalPayments, attributedPayments, monthlyAttributedPayments: attributedPayments, paidPeriodAttributedPayments, error: "" };
+    latestAdsDashboard = { ...empty, selectedAdAccountId, adAccounts: selectedAccounts, rows: allRows, totalsByCurrency, campaigns, adRows, monthlyAdRows: adRows, monthRange: periodRange, hourlyInsights, recommendations, totalPayments, attributedPayments, monthlyAttributedPayments: attributedPayments, paidPeriodAttributedPayments, error: "" };
     return latestAdsDashboard;
   } catch (err) {
     console.warn("⚠️ Could not build Ads dashboard:", err.message);
@@ -1795,7 +1825,7 @@ function cachedAdsDashboard(req, options = {}) {
   const key = [
     range.fromDate,
     range.toDate,
-    String(req.query.adAccountId ?? ""),
+    primaryMetaAdAccountId(),
     process.env.ZERNIO_META_ADS_ACCOUNT_ID ?? "auto",
     process.env.ZERNIO_META_ADS_SOURCE ?? "all",
     getSetting("usd_ars_rate", "1500"),
@@ -1812,7 +1842,7 @@ function cachedAdsDashboard(req, options = {}) {
 }
 
 async function backfillCtwaAttribution(options = {}) {
-  if (!process.env.ZERNIO_API_KEY) return { saved: 0 };
+  if (!process.env.ZERNIO_API_KEY) return { pages: 0, conversations: 0, attributed: 0, saved: 0, errors: [] };
 
   const targets = [];
   const addTarget = (accountId, platform) => {
@@ -1836,44 +1866,58 @@ async function backfillCtwaAttribution(options = {}) {
     console.warn("⚠️ Could not list accounts for Meta attribution backfill:", err.message);
   }
 
+  let pages = 0;
+  let conversationsRead = 0;
+  let attributed = 0;
   let saved = 0;
   const errors = [];
+  const maxPages = Math.max(1, Number(options.maxPages) || 1);
 
   for (const target of targets) {
     try {
-      const payload = await listInboxConversations({ accountId: target.accountId, platform: target.platform, limit: options.limit || 100 });
-      const conversations = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.conversations) ? payload.conversations : [];
+      const result = await consumeInboxConversationPages(
+        ({ limit, cursor }) => listInboxConversations({ accountId: target.accountId, platform: target.platform, limit, cursor }),
+        {
+          limit: options.limit || 100,
+          maxPages,
+          onPage: (conversations) => {
+            for (const conversation of conversations) {
+              const attribution = extractCtwaAttribution({ conversation });
+              if (!attribution?.ctwaSourceId) continue;
+              attributed += 1;
 
-      for (const conversation of conversations) {
-        const attribution = extractCtwaAttribution({ conversation });
-        if (!attribution?.ctwaSourceId) continue;
+              const participantId = firstValue(conversation.participantPhoneNumber, conversation.participantId, conversation.participantUsername);
+              if (!participantId && !conversation.id) continue;
+              const contactId = target.platform === "whatsapp"
+                ? String(participantId).replace(/^\+/, "")
+                : `${target.platform === "facebook" ? "fb" : "ig"}:${participantId || conversation.id}`;
+              const username = firstValue(conversation.participantUsername, conversation.participantName);
+              const displayHandle = target.platform === "instagram" && username ? `@${username.replace(/^@+/, "")}` : username;
 
-        const participantId = firstValue(conversation.participantPhoneNumber, conversation.participantId, conversation.participantUsername);
-        if (!participantId && !conversation.id) continue;
-        const contactId = target.platform === "whatsapp"
-          ? String(participantId).replace(/^\+/, "")
-          : `${target.platform === "facebook" ? "fb" : "ig"}:${participantId || conversation.id}`;
-        const username = firstValue(conversation.participantUsername, conversation.participantName);
-        const displayHandle = target.platform === "instagram" && username ? `@${username.replace(/^@+/, "")}` : username;
-
-        if (saveContactCtwaAttribution(contactId, {
-          ...attribution,
-          channel: target.platform,
-          conversationId: conversation.id,
-          accountId: conversation.accountId || target.accountId,
-          externalId: participantId,
-          displayHandle,
-          name: conversation.participantName || username,
-          conversationUrl: conversation.url,
-        })) saved += 1;
-      }
+              if (saveContactCtwaAttribution(contactId, {
+                ...attribution,
+                channel: target.platform,
+                conversationId: conversation.id,
+                accountId: conversation.accountId || target.accountId,
+                externalId: participantId,
+                displayHandle,
+                name: conversation.participantName || username,
+                conversationUrl: conversation.url,
+              })) saved += 1;
+            }
+          },
+        }
+      );
+      pages += result.pages;
+      conversationsRead += result.conversations;
+      if (result.truncated) errors.push(`${target.platform}: se alcanzó el límite de ${maxPages} páginas`);
     } catch (err) {
       errors.push(`${target.platform}:${err.message}`);
       console.warn(`⚠️ Could not backfill ${target.platform} attribution:`, err.message);
     }
   }
 
-  return { saved, error: errors.join("; ") };
+  return { pages, conversations: conversationsRead, attributed, saved, errors };
 }
 
 function phoneDigits(value) {
@@ -2169,6 +2213,10 @@ function adminStatusMessage(status) {
     release_no_conversation: "No pude liberar el producto porque falta conversationId.",
     paid_send_failed: "Pago guardado, pero fallo el envio del link. Revisá la consola y las credenciales de Zernio.",
     unpaid: "Estado de comprador quitado. El historial de ingresos se conserva.",
+    conversion_reverted: "Conversión revertida y el ingreso fue quitado de los reportes.",
+    conversion_revert_missing: "No encontré un ingreso para revertir en esta conversación.",
+    ctwa_backfill_completed: "Atribución CTWA actualizada.",
+    ctwa_backfill_partial: "Atribución CTWA actualizada parcialmente. Revisá los errores informados.",
     settings_saved: "Configuracion guardada.",
     ad_spend_saved: "Inversion diaria guardada.",
     revenue_adjusted: "Ajuste de facturacion guardado.",
@@ -2274,9 +2322,13 @@ function renderPaymentActions(req, phoneNumber, section, conversation) {
   const isPaid = conversation && conversation.paid === 1;
   const promoAlreadySent = conversation && conversation.promoSent === 1;
 
+  if (isPaid) {
+    return `<div class="quick-actions"><form method="post" action="/admin/contacts/${encodedPhone}/revert-conversion" onsubmit="return confirm('¿Revertir esta conversión? Se quitará el último ingreso de los reportes.')">${adminHiddenFields(req, { section })}<button type="submit" class="ghost danger">Revertir conversión</button></form></div>`;
+  }
+
   return `<div class="quick-actions">
-    ${!isPaid && !promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-promo">${adminHiddenFields(req, { section })}<button type="submit" class="accent">Liberar producto $14999</button></form>` : ""}
-    ${!isPaid && !promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-flash">${adminHiddenFields(req, { section })}<button type="submit" class="bomb">Bombazo $4999</button></form>` : ""}
+    ${!promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-promo">${adminHiddenFields(req, { section })}<button type="submit" class="accent">Liberar producto $14999</button></form>` : ""}
+    ${!promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-flash">${adminHiddenFields(req, { section })}<button type="submit" class="bomb">Bombazo $4999</button></form>` : ""}
     <form method="post" action="/admin/contacts/${encodedPhone}/paid">${baseFields}<button type="submit">${formatMoneyShort(PAYMENT_PRODUCTS.base.amount)}</button></form>
     <form method="post" action="/admin/contacts/${encodedPhone}/paid">${promoPayFields}<button type="submit">${formatMoneyShort(PAYMENT_PRODUCTS.promo.amount)}</button></form>
     <form method="post" action="/admin/contacts/${encodedPhone}/trigger-flow">${adminHiddenFields(req, { section })}<button type="submit" class="secondary">Iniciar flujo</button></form>
@@ -2411,6 +2463,8 @@ function renderRecentConversationRail(req, conversations) {
     const displayName = contactDisplayName(conversation);
     const nextAction = nextActionFor(conversation);
     const interest = leadInterest(conversation);
+    const isConversion = conversation.paid === 1 || Number(conversation.paymentCount) > 0;
+    const conversionAt = conversation.latestPaymentAt || conversation.paidAt;
     const contactLink = isSocialDm && conversation.conversationUrl
       ? `<a href="${escapeHtml(conversation.conversationUrl)}" target="_blank" rel="noopener" class="contact-link">${escapeHtml(displayName)}</a>`
       : isSocialDm
@@ -2424,27 +2478,27 @@ function renderRecentConversationRail(req, conversations) {
           ? "Producto liberado"
           : "Sin pago";
 
-    return `<article class="recent-card" style="--card-index:${index}">
+    return `<article class="recent-card${isConversion ? " recent-card-conversion" : ""}" style="--card-index:${index}">
       <div class="recent-card-top">
         <div>${contactLink}<small>${channelBadge(conversation)} ${isSocialDm ? escapeHtml(conversation.phoneNumber) : ""}</small></div>
-        <span class="badge badge-${nextAction.tone}">${escapeHtml(nextAction.label)}</span>
+        <div class="recent-card-badges">${isConversion ? `<span class="conversion-badge">Conversión</span>` : ""}<span class="badge badge-${nextAction.tone}">${escapeHtml(nextAction.label)}</span></div>
       </div>
       <p class="message-preview">${escapeHtml(conversation.lastMessage || "Sin mensajes todavia")}</p>
       <div class="recent-card-meta">
         <span><i class="interest-dot interest-${interest.tone}"></i>${escapeHtml(interest.label)}</span>
         <span>${escapeHtml(commercialDetail)}</span>
-        <span>${formatRelativeTime(conversation.updatedAt)}</span>
+        <span>${isConversion && conversionAt ? `Pagó ${formatRelativeTime(conversionAt)}` : formatRelativeTime(conversation.updatedAt)}</span>
       </div>
       ${renderPaymentActions(req, conversation.phoneNumber, "dashboard", conversation)}
     </article>`;
   }).join("");
 
-  return `<aside class="recent-rail" aria-label="Ultimas conversaciones">
+  return `<aside class="recent-rail" aria-label="Ultimas conversiones y conversaciones">
     <div class="recent-rail-header">
       <div>
         <span class="eyebrow">Atencion ahora</span>
-        <h2>Ultimas 5 conversaciones</h2>
-        <small>Siempre visibles para cerrar rápido.</small>
+        <h2>Conversiones y actividad reciente</h2>
+        <small>Las últimas conversiones aparecen primero, sin filtrar por fecha.</small>
       </div>
       <a class="badge badge-neutral" href="${adminSectionPath(req, "conversations")}">Ver todas</a>
     </div>
@@ -2815,8 +2869,8 @@ function renderAdsDetailPanel(adsDashboard, options = {}) {
       <td>${preview}</td>
       <td><strong>${escapeHtml(ad.name ?? "Anuncio")}</strong><small>${escapeHtml(ad.campaignName ?? "")} · ${escapeHtml(ad.platformAdId ?? "")}</small>${creativeText ? `<p class="message-preview">${escapeHtml(creativeText)}</p>` : ""}${creative.instagramPermalinkUrl ? `<a class="inline-action" href="${escapeHtml(creative.instagramPermalinkUrl)}" target="_blank" rel="noreferrer">ver post</a>` : ""}</td>
       <td>${renderAdStatusCell(ad)}</td>
-      <td class="money">${formatAdMoney(ad.spend, currency)}${String(currency).toUpperCase() === "USD" ? `<small>${formatMoney(Math.round(ad.spendArs))}</small>` : ""}</td>
-      <td>${ad.metaConversations}<small>${ad.crmChats} CRM · ${ad.crmChats ? `${formatMoney(Math.round(ad.spendArs / ad.crmChats))} / CRM` : "sin CRM"}</small></td>
+      <td class="money">${formatAdMoney(ad.spend, currency)}</td>
+      <td>${ad.metaConversations}<small>${ad.crmChats} CRM · ${ad.crmChats ? `${formatAdMoney(ad.spend / ad.crmChats, currency)} / CRM` : "sin CRM"}</small></td>
       <td>${renderQualityMiniChart(ad.quality)}</td>
       <td>${ad.crmSales}<small>${formatMoney(ad.crmRevenue)} cohorte</small></td>
       <td>${formatMultiple(ad.realRoas)}</td>
@@ -2831,15 +2885,16 @@ function renderAdsDetailPanel(adsDashboard, options = {}) {
   </section>`;
 }
 
-function renderAdsDashboard(req, adsDashboard, optionsContext = {}) {
+function renderAdsDashboard(req, adsDashboard) {
   if (!adsDashboard) return `<section class="view" id="ads"><section class="panel"><div class="empty">Todavía no se cargaron métricas de Meta Ads.</div></section></section>`;
 
-  const usdArsRate = Math.max(1, Number(optionsContext.usdArsRate) || 1500);
   const adAccounts = adsDashboard.adAccounts ?? [];
-  const options = [...adAccounts.map((account) => {
+  const options = adAccounts.map((account) => {
     const selected = account.id === adsDashboard.selectedAdAccountId ? " selected" : "";
     return `<option value="${escapeHtml(account.id)}"${selected}>${escapeHtml(account.name || account.id)} · ${escapeHtml(account.currency || "-")}</option>`;
-  }), `<option value="all"${adsDashboard.selectedAdAccountId === "all" ? " selected" : ""}>Todas las cuentas</option>`].join("");
+  }).join("");
+  const nativeCurrency = adAccounts[0]?.currency || "USD";
+  const nativeSpend = (adsDashboard.adRows ?? []).reduce((total, ad) => total + (Number(ad.spend) || 0), 0);
   const spendArs = (adsDashboard.adRows ?? []).reduce((total, ad) => total + (Number(ad.spendArs) || 0), 0);
   const crmChats = (adsDashboard.adRows ?? []).reduce((total, ad) => total + (Number(ad.crmChats) || 0), 0);
   const metaChats = (adsDashboard.adRows ?? []).reduce((total, ad) => total + (Number(ad.metaConversations) || 0), 0);
@@ -2847,8 +2902,9 @@ function renderAdsDashboard(req, adsDashboard, optionsContext = {}) {
   const crmRevenue = (adsDashboard.adRows ?? []).reduce((total, ad) => total + (Number(ad.crmRevenue) || 0), 0);
   const paidPeriodAttributedSales = (adsDashboard.paidPeriodAttributedPayments ?? []).length;
   const alertCount = (adsDashboard.adRows ?? []).filter((ad) => ["danger", "warn"].includes(ad.alert?.tone)).length;
-  const costPerChat = crmChats ? spendArs / crmChats : 0;
-  const costPerMetaChat = metaChats ? spendArs / metaChats : 0;
+  const nativeCostPerChat = crmChats ? nativeSpend / crmChats : 0;
+  const nativeCostPerMetaChat = metaChats ? nativeSpend / metaChats : 0;
+  const costPerMetaChatArs = metaChats ? spendArs / metaChats : 0;
   const realRoas = spendArs ? crmRevenue / spendArs : 0;
   const quality = sumQualityCounts(adsDashboard.adRows ?? []);
   const channelSummary = (adsDashboard.attributedPayments ?? []).reduce((summary, payment) => {
@@ -2866,7 +2922,7 @@ function renderAdsDashboard(req, adsDashboard, optionsContext = {}) {
       </div>
       <form method="get" action="/admin" class="income-calendar">
         ${adminHiddenFields(req, { section: "ads", adsPreset: adsDashboard.preset })}
-        <label>Cuenta Ads<select name="adAccountId">${options}</select></label>
+        <label>Cuenta Ads<select disabled>${options}</select></label>
         <button class="secondary" type="submit">Actualizar</button>
       </form>
       <div class="range-shortcuts ads-presets">
@@ -2878,8 +2934,8 @@ function renderAdsDashboard(req, adsDashboard, optionsContext = {}) {
       </div>
     </section>
     <div class="hero-kpi-grid ads-currency-grid">
-      ${renderHeroKpiCard("Gasto", formatMoney(Math.round(spendArs)), `${metaChats} chats Meta · ${crmChats} CRM atribuidos`, spendArs ? "warn" : "", "roas")}
-      ${renderHeroKpiCard("Costo por chat", metaChats ? formatMoney(Math.round(costPerMetaChat)) : crmChats ? formatMoney(Math.round(costPerChat)) : "-", metaChats ? "sobre chats oficiales Meta" : "sobre chats CRM atribuidos", costPerMetaChat && costPerMetaChat < 1800 ? "good" : costPerMetaChat ? "warn" : "", "volume")}
+      ${renderHeroKpiCard("Gasto", formatAdMoney(nativeSpend, nativeCurrency), `${metaChats} chats Meta · ${crmChats} CRM atribuidos`, nativeSpend ? "warn" : "", "roas")}
+      ${renderHeroKpiCard("Costo por chat", metaChats ? formatAdMoney(nativeCostPerMetaChat, nativeCurrency) : crmChats ? formatAdMoney(nativeCostPerChat, nativeCurrency) : "-", metaChats ? "sobre chats oficiales Meta" : "sobre chats CRM atribuidos", costPerMetaChatArs && costPerMetaChatArs < 1800 ? "good" : costPerMetaChatArs ? "warn" : "", "volume")}
       ${renderHeroKpiCard("Ventas Ads cohorte", String(crmSales), `${formatMoney(crmRevenue)} · leads iniciados en período · ${channelText}`, crmSales ? "good" : "warn", "sales")}
       ${renderHeroKpiCard("ROAS cohorte", formatMultiple(realRoas), `${paidPeriodAttributedSales} ventas Ads cobradas en período · ${alertCount} alertas`, realRoas >= 1 ? "good" : spendArs ? "warn" : "", "interest")}
     </div>
@@ -2962,22 +3018,27 @@ function renderAdminPage(req, context = {}) {
     incomeFilters.to = originalFrom;
   }
   const dashboardFilters = { from: selectedDate, to: selectedDate };
+  const primaryAdAccountId = primaryMetaAdAccountId();
   const payments = needs.dashboard
     ? listPayments(dashboardFilters)
     : needs.income ? listPayments(incomeFilters) : [];
   const selectedPayments = needs.dashboard ? payments : [];
   const adSpend = needs.dashboard ? getAdSpend(selectedDate) : { amount: 0 };
-  const metaAdsMetrics = needs.dashboard ? (context.metaAdsMetrics ?? getMetaAdsDailyMetrics(selectedDate)) : null;
+  const metaAdsMetrics = needs.dashboard ? (context.metaAdsMetrics ?? getMetaAdsDailyMetrics(selectedDate, primaryAdAccountId)) : null;
   const revenueAdjustment = needs.dashboard ? getRevenueAdjustment(selectedDate) : { amount: 0 };
   const rangeAdSpendRows = needs.income ? listAdSpendRange(incomeFilters) : [];
-  const rangeMetaAdsRows = needs.income ? listMetaAdsDailyMetricsRange(incomeFilters) : [];
+  const rangeMetaAdsRows = needs.income ? listMetaAdsDailyMetricsRange({ ...incomeFilters, adAccountId: primaryAdAccountId }) : [];
   const rangeRevenueAdjustmentRows = needs.income ? listRevenueAdjustmentsRange(incomeFilters) : [];
   const settings = needs.settings ? getSettings() : { usd_ars_rate: needs.financial ? getSetting("usd_ars_rate", "1500") : "1500" };
   const usdArsRate = needs.financial ? Math.max(1, parseMoney(settings.usd_ars_rate, 1500)) : 1500;
-  const statusMessage = adminStatusMessage(String(req.query.status ?? ""));
+  const status = String(req.query.status ?? "");
+  const ctwaBackfillSummary = ["ctwa_backfill_completed", "ctwa_backfill_partial"].includes(status)
+    ? ` Páginas: ${Math.max(0, Number.parseInt(req.query.ctwaPages ?? "0", 10) || 0)} · conversaciones: ${Math.max(0, Number.parseInt(req.query.ctwaConversations ?? "0", 10) || 0)} · atribuciones detectadas: ${Math.max(0, Number.parseInt(req.query.ctwaAttributed ?? "0", 10) || 0)}${Number(req.query.ctwaErrors) ? ` · errores: ${Math.max(0, Number.parseInt(req.query.ctwaErrors, 10) || 0)}` : ""}.`
+    : "";
+  const statusMessage = `${adminStatusMessage(status)}${ctwaBackfillSummary}`;
   const statusBanner = statusMessage ? `<div class="notice">${escapeHtml(statusMessage)}</div>` : "";
   const dashboardConversationTotal = needs.dashboard ? countConversationSummaries({ createdFrom: selectedDate, createdTo: selectedDate }) : 0;
-  const dashboardConversations = needs.dashboard ? listConversationSummaries({ createdFrom: selectedDate, createdTo: selectedDate, limit: 5 }) : [];
+  const dashboardConversations = needs.dashboard ? listConversationSummaries({ limit: 5, prioritizeConversions: true }) : [];
   const selectedAttributedConversations = needs.dashboard ? listCtwaAttributedConversations(dashboardFilters) : [];
   const selectedCrmChats = selectedAttributedConversations.length;
   const selectedMetaChats = metaMessagingConversationCount(metaAdsMetrics);
@@ -2998,9 +3059,11 @@ function renderAdminPage(req, context = {}) {
   const selectedSpendSource = effectiveSpendSource(selectedManualAdSpend, metaAdsMetrics);
   const selectedAdSpendLabel = selectedMetaAdsUnavailable && !selectedManualAdSpend
     ? "Sin datos"
-    : formatMoney(selectedAdSpend);
+    : !selectedMetaAdsUnavailable && Number(metaAdsMetrics?.spend) > 0
+      ? formatAdMoney(metaAdsMetrics.spend, metaAdsMetrics.currency || cachedPrimaryAdAccountCurrency)
+      : formatMoney(selectedAdSpend);
   const selectedAdSpendDetail = !selectedMetaAdsUnavailable && Number(metaAdsMetrics?.spend) > 0
-    ? `${formatAdMoney(metaAdsMetrics.spend, metaAdsMetrics.currency || cachedPrimaryAdAccountCurrency)}${String(metaAdsMetrics.currency || cachedPrimaryAdAccountCurrency).toUpperCase() === "USD" ? ` · dólar ${formatMoney(usdArsRate)}` : ""}`
+    ? `${metaAdsMetrics.adAccountName || DEFAULT_META_AD_ACCOUNT_NAME}${String(metaAdsMetrics.currency || cachedPrimaryAdAccountCurrency).toUpperCase() === "USD" ? ` · dólar ${formatMoney(metaAdsMetrics.usdArsRate || usdArsRate)} para métricas financieras` : ""}`
     : "";
   const selectedAdSpendCardText = selectedAdSpend
     ? `${selectedSpendSource}${selectedAdSpendDetail ? ` · ${selectedAdSpendDetail}` : ""}${metaAdsMetrics?.updatedAt ? ` · ${formatRelativeTime(metaAdsMetrics.updatedAt)}` : ""}`
@@ -3083,7 +3146,7 @@ function renderAdminPage(req, context = {}) {
   const dashboardChipFilters = { from: shiftDateKey(todayKey, -6), to: todayKey };
   const dashboardChipPayments = needs.dashboard ? listPayments(dashboardChipFilters) : [];
   const dashboardChipSpend = new Map((needs.dashboard ? listAdSpendRange(dashboardChipFilters) : []).map((row) => [row.date, Number(row.amount) || 0]));
-  const dashboardChipMetaSpend = new Map((needs.dashboard ? listMetaAdsDailyMetricsRange(dashboardChipFilters) : []).map((row) => [row.date, row]));
+  const dashboardChipMetaSpend = new Map((needs.dashboard ? listMetaAdsDailyMetricsRange({ ...dashboardChipFilters, adAccountId: primaryAdAccountId }) : []).map((row) => [row.date, row]));
   const dashboardChipAdjustments = new Map(
     (needs.dashboard ? listRevenueAdjustmentsRange(dashboardChipFilters) : []).map((row) => [row.date, Number(row.amount) || 0])
   );
@@ -3443,6 +3506,9 @@ function renderAdminPage(req, context = {}) {
     .recent-card:hover { border-color: rgba(201,165,90,.26); transform: translateY(-1px); transition: transform .18s ease, border-color .18s ease; }
     .recent-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
     .recent-card-top .badge { flex-shrink: 0; }
+    .recent-card-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+    .recent-card-conversion { border-color: rgba(73, 190, 133, .52); background: linear-gradient(155deg, rgba(73, 190, 133, .16), rgba(201, 165, 90, .05)); box-shadow: inset 3px 0 0 rgba(73, 190, 133, .88), inset 0 1px 0 rgba(255,255,255,.07); }
+    .conversion-badge { display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; border: 1px solid rgba(73, 190, 133, .52); border-radius: 999px; color: #d7ffe7; background: rgba(73, 190, 133, .18); font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
     .recent-card .message-preview { max-width: none; padding: 8px 0 0; border-top: 1px solid var(--line-soft); }
     .recent-card-meta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--soft); font-size: 10px; }
     .recent-card-meta span { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border-radius: 999px; background: rgba(255,255,255,.035); }
@@ -3737,7 +3803,7 @@ function renderAdminPage(req, context = {}) {
         </div>
       </section>` : ""}
 
-      ${activeSection === "ads" ? renderAdsDashboard(req, adsDashboard, { usdArsRate }) : ""}
+      ${activeSection === "ads" ? renderAdsDashboard(req, adsDashboard) : ""}
 
       ${activeSection === "conversations" ? `<section class="view" id="conversations">
         <section class="panel">
@@ -4094,16 +4160,42 @@ app.get("/admin", requireAdmin, async (req, res) => {
   let adsDashboard = null;
 
   if (section === "dashboard") {
-    metaAdsMetrics = getMetaAdsDailyMetrics(selectedDate);
-    if (forceRefresh) metaAdsMetrics = await refreshMetaAdsMetrics(selectedDate, { force: true });
-    else void refreshMetaAdsMetrics(selectedDate);
+    metaAdsMetrics = getMetaAdsDailyMetrics(selectedDate, primaryMetaAdAccountId());
+    if (forceRefresh) {
+      [metaAdsMetrics] = await Promise.all([
+        refreshMetaAdsMetrics(selectedDate, { force: true }),
+        refreshLegacyMetaAdsMetrics(),
+      ]);
+    }
+    else void Promise.all([
+      refreshLegacyMetaAdsMetrics(),
+      refreshMetaAdsMetricsRange(shiftDateKey(selectedDate, -6), selectedDate),
+    ])
+      .catch((err) => console.warn("⚠️ Meta Ads dashboard backfill failed:", err.message));
+  }
+  if (section === "income") {
+    const requestedFrom = String(req.query.from ?? "");
+    const requestedTo = String(req.query.to ?? "");
+    const fromDate = isValidDateKey(requestedFrom) ? requestedFrom : shiftDateKey(localDateKey(), -6);
+    const toDate = isValidDateKey(requestedTo) ? requestedTo : localDateKey();
+    if (forceRefresh) {
+      await Promise.all([
+        refreshMetaAdsMetricsRange(fromDate, toDate, { force: true }),
+        refreshLegacyMetaAdsMetrics(),
+      ]);
+    }
+    else void Promise.all([
+      refreshLegacyMetaAdsMetrics(),
+      refreshMetaAdsMetricsRange(fromDate, toDate),
+    ])
+      .catch((err) => console.warn("⚠️ Meta Ads income backfill failed:", err.message));
   }
   if (section === "ads") adsDashboard = await cachedAdsDashboard(req, { force: forceRefresh });
   if (shouldRunCtwaBackfill({ query: req.query, env: process.env })) {
-    const explicitlyRequested = ["1", "true"].includes(String(req.query.ctwaBackfill ?? "").toLowerCase());
+    const explicitlyRequested = ["1", "true"].includes(String(req.query.ctwaBackfill ?? req.query.ctwa_backfill ?? "").toLowerCase());
     if (!ctwaBackfillRequest && (explicitlyRequested || Date.now() - lastCtwaBackfillAt >= 300_000)) {
       lastCtwaBackfillAt = Date.now();
-      ctwaBackfillRequest = backfillCtwaAttribution({ limit: 100 })
+      ctwaBackfillRequest = backfillCtwaAttribution({ limit: 100, maxPages: explicitlyRequested ? 50 : 1 })
         .catch((err) => console.warn("⚠️ CTWA backfill failed:", err.message))
         .finally(() => { ctwaBackfillRequest = null; });
     }
@@ -4114,6 +4206,30 @@ app.get("/admin", requireAdmin, async (req, res) => {
 
 app.get("/admin/api/revision", requireAdmin, (_, res) => {
   res.json(getAdminRevision(localDateKey()));
+});
+
+app.post("/admin/ctwa-backfill", requireAdmin, async (req, res) => {
+  if (ctwaBackfillRequest) {
+    return res.redirect(303, adminPath(req, { status: "ctwa_backfill_partial", section: req.body.section ?? "ads", ctwaErrors: 1 }));
+  }
+
+  const request = backfillCtwaAttribution({ limit: 100, maxPages: 50 });
+  ctwaBackfillRequest = request.finally(() => { ctwaBackfillRequest = null; });
+
+  try {
+    const result = await ctwaBackfillRequest;
+    return res.redirect(303, adminPath(req, {
+      status: result.errors.length ? "ctwa_backfill_partial" : "ctwa_backfill_completed",
+      section: req.body.section ?? "ads",
+      ctwaPages: result.pages,
+      ctwaConversations: result.conversations,
+      ctwaAttributed: result.attributed,
+      ctwaErrors: result.errors.length,
+    }));
+  } catch (err) {
+    console.warn("⚠️ CTWA attribution backfill failed:", err.message);
+    return res.redirect(303, adminPath(req, { status: "ctwa_backfill_partial", section: req.body.section ?? "ads", ctwaErrors: 1 }));
+  }
 });
 
 app.get("/admin/api/performance", requireAdmin, (_, res) => {
@@ -4254,6 +4370,14 @@ app.post("/admin/contacts/:phoneNumber/paid", requireAdmin, async (req, res) => 
 app.post("/admin/contacts/:phoneNumber/unpaid", requireAdmin, (req, res) => {
   markContactPaid(req.params.phoneNumber, false);
   res.redirect(303, adminPath(req, { status: "unpaid", section: "conversations" }));
+});
+
+app.post("/admin/contacts/:phoneNumber/revert-conversion", requireAdmin, (req, res) => {
+  const reversal = reverseLatestPayment(req.params.phoneNumber);
+  res.redirect(303, adminPath(req, {
+    status: reversal ? "conversion_reverted" : "conversion_revert_missing",
+    section: req.body.section ?? "dashboard",
+  }));
 });
 
 app.post("/admin/contacts/:phoneNumber/delete", requireAdmin, (req, res) => {

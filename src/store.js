@@ -260,7 +260,9 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS meta_ads_daily_metrics (
-    date TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    ad_account_id TEXT NOT NULL,
+    ad_account_name TEXT NOT NULL DEFAULT '',
     account_id TEXT NOT NULL DEFAULT '',
     spend REAL NOT NULL DEFAULT 0,
     impressions INTEGER NOT NULL DEFAULT 0,
@@ -271,9 +273,11 @@ db.exec(`
     purchase_value REAL NOT NULL DEFAULT 0,
     roas REAL NOT NULL DEFAULT 0,
     currency TEXT NOT NULL DEFAULT '',
+    usd_ars_rate REAL NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'zernio',
     raw_json TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (date, ad_account_id)
   );
 
   CREATE TABLE IF NOT EXISTS meta_conversion_events (
@@ -363,6 +367,41 @@ if (!messageColumns.includes("contact_key")) db.exec("ALTER TABLE messages ADD C
 const paymentColumns = db.prepare("PRAGMA table_info(payments)").all().map((column) => column.name);
 if (!paymentColumns.includes("contact_key")) db.exec("ALTER TABLE payments ADD COLUMN contact_key TEXT NOT NULL DEFAULT ''");
 
+const metaAdsColumns = db.prepare("PRAGMA table_info(meta_ads_daily_metrics)").all().map((column) => column.name);
+if (!metaAdsColumns.includes("ad_account_id")) {
+  db.exec(`
+    CREATE TABLE meta_ads_daily_metrics_v2 (
+      date TEXT NOT NULL,
+      ad_account_id TEXT NOT NULL,
+      ad_account_name TEXT NOT NULL DEFAULT '',
+      account_id TEXT NOT NULL DEFAULT '',
+      spend REAL NOT NULL DEFAULT 0,
+      impressions INTEGER NOT NULL DEFAULT 0,
+      clicks INTEGER NOT NULL DEFAULT 0,
+      cpc REAL NOT NULL DEFAULT 0,
+      cpm REAL NOT NULL DEFAULT 0,
+      conversions INTEGER NOT NULL DEFAULT 0,
+      purchase_value REAL NOT NULL DEFAULT 0,
+      roas REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT '',
+      usd_ars_rate REAL NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'zernio',
+      raw_json TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (date, ad_account_id)
+    );
+    INSERT INTO meta_ads_daily_metrics_v2 (
+      date, ad_account_id, account_id, spend, impressions, clicks, cpc, cpm,
+      conversions, purchase_value, roas, currency, source, raw_json, updated_at
+    )
+    SELECT date, '', account_id, spend, impressions, clicks, cpc, cpm,
+           conversions, purchase_value, roas, currency, source, raw_json, updated_at
+    FROM meta_ads_daily_metrics;
+    DROP TABLE meta_ads_daily_metrics;
+    ALTER TABLE meta_ads_daily_metrics_v2 RENAME TO meta_ads_daily_metrics;
+  `);
+}
+
 const backfillContactKey = db.prepare("UPDATE contacts SET contact_key = ?, attribution_at = CASE WHEN attribution_at IS NULL AND ctwa_source_id != '' THEN COALESCE(ctwa_captured_at, created_at) ELSE attribution_at END WHERE phone_number = ?");
 for (const row of db.prepare("SELECT phone_number, account_id FROM contacts WHERE contact_key = '' OR (attribution_at IS NULL AND ctwa_source_id != '')").all()) {
   backfillContactKey.run(normalizeContactKey(row.phone_number, row.account_id), row.phone_number);
@@ -393,6 +432,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_payments_phone_paid_at ON payments(phone_number, paid_at);
   CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at);
   CREATE INDEX IF NOT EXISTS idx_payments_contact_paid_at ON payments(contact_key, paid_at);
+  CREATE INDEX IF NOT EXISTS idx_meta_ads_account_date ON meta_ads_daily_metrics(ad_account_id, date);
 `);
 db.exec("COMMIT");
 } catch (error) {
@@ -1150,6 +1190,47 @@ export function recordPayment(phoneNumber, details = {}) {
   return result.lastInsertRowid;
 }
 
+export function reverseLatestPayment(phoneNumber) {
+  const contact = String(phoneNumber ?? "").trim();
+  if (!contact) return null;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const payment = db.prepare(
+      `SELECT id, amount, paid_at AS paidAt
+       FROM payments
+       WHERE phone_number = ?
+       ORDER BY paid_at DESC, id DESC
+       LIMIT 1`
+    ).get(contact);
+    if (!payment) {
+      db.exec("COMMIT");
+      return null;
+    }
+
+    db.prepare("DELETE FROM payments WHERE id = ?").run(payment.id);
+    const remaining = db.prepare(
+      `SELECT paid_at AS paidAt
+       FROM payments
+       WHERE phone_number = ?
+       ORDER BY paid_at DESC, id DESC
+       LIMIT 1`
+    ).get(contact);
+    db.prepare(
+      `UPDATE contacts
+       SET paid = ?,
+           paid_at = ?,
+           updated_at = ?
+       WHERE phone_number = ?`
+    ).run(remaining ? 1 : 0, remaining?.paidAt ?? null, nowIso(), contact);
+    db.exec("COMMIT");
+    return { paymentId: payment.id, amount: payment.amount, paidAt: payment.paidAt, stillPaid: Boolean(remaining) };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function markProductLinkSent(phoneNumber) {
   ensureContact(phoneNumber);
   const now = nowIso();
@@ -1307,13 +1388,18 @@ export function listConversationSummaries(options = {}) {
   const offset = hasLimit ? Math.max(0, Number.parseInt(options.offset ?? 0, 10) || 0) : 0;
   const pagination = hasLimit ? "LIMIT ? OFFSET ?" : "";
   const queryParams = hasLimit ? [...params, limit, offset] : params;
+  const order = options.prioritizeConversions
+    ? `ORDER BY CASE WHEN c.paid = 1 THEN 0 ELSE 1 END,
+              CASE WHEN c.paid = 1 THEN COALESCE(c.paid_at, c.updated_at) ELSE c.updated_at END DESC,
+              c.phone_number ASC`
+    : "ORDER BY c.updated_at DESC, c.phone_number ASC";
 
   return measuredAll("sqlite.admin.conversation_page", db.prepare(
       `WITH filtered_contacts AS (
          SELECT c.*
          FROM contacts c
          ${where}
-         ORDER BY c.updated_at DESC, c.phone_number ASC
+         ${order}
          ${pagination}
        ),
        message_stats AS (
@@ -1375,7 +1461,7 @@ export function listConversationSummaries(options = {}) {
         LEFT JOIN message_stats ms ON ms.phone_number = c.phone_number
         LEFT JOIN messages lm ON lm.id = ms.last_message_id
         LEFT JOIN payment_stats ps ON ps.phone_number = c.phone_number AND ps.payment_rank = 1
-        ORDER BY c.updated_at DESC, c.phone_number ASC`
+        ${order}`
     ), queryParams);
 }
 
@@ -1508,11 +1594,12 @@ export function upsertMetaAdsDailyMetrics(date, metrics = {}) {
 
   const now = nowIso();
   db.prepare(
-    `INSERT INTO meta_ads_daily_metrics (
-       date, account_id, spend, impressions, clicks, cpc, cpm, conversions,
-       purchase_value, roas, currency, source, raw_json, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(date) DO UPDATE SET
+     `INSERT INTO meta_ads_daily_metrics (
+       date, ad_account_id, ad_account_name, account_id, spend, impressions, clicks, cpc, cpm, conversions,
+       purchase_value, roas, currency, usd_ars_rate, source, raw_json, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(date, ad_account_id) DO UPDATE SET
+       ad_account_name = excluded.ad_account_name,
        account_id = excluded.account_id,
        spend = excluded.spend,
        impressions = excluded.impressions,
@@ -1523,11 +1610,14 @@ export function upsertMetaAdsDailyMetrics(date, metrics = {}) {
        purchase_value = excluded.purchase_value,
        roas = excluded.roas,
        currency = excluded.currency,
+       usd_ars_rate = excluded.usd_ars_rate,
        source = excluded.source,
        raw_json = excluded.raw_json,
        updated_at = excluded.updated_at`
   ).run(
     key,
+    String(metrics.adAccountId ?? "").trim(),
+    String(metrics.adAccountName ?? "").trim(),
     String(metrics.accountId ?? "").trim(),
     Number(metrics.spend) || 0,
     Math.max(0, Number.parseInt(metrics.impressions ?? 0, 10) || 0),
@@ -1538,6 +1628,7 @@ export function upsertMetaAdsDailyMetrics(date, metrics = {}) {
     Number(metrics.purchaseValue) || 0,
     Number(metrics.roas) || 0,
     String(metrics.currency ?? "").trim(),
+    Math.max(0, Number(metrics.usdArsRate) || 0),
     String(metrics.source ?? "zernio").trim() || "zernio",
     metrics.rawJson ? JSON.stringify(metrics.rawJson) : "",
     now
@@ -1546,14 +1637,18 @@ export function upsertMetaAdsDailyMetrics(date, metrics = {}) {
   return true;
 }
 
-export function getMetaAdsDailyMetrics(date) {
+export function getMetaAdsDailyMetrics(date, adAccountId = "") {
   const key = String(date ?? "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
+  const accountKey = String(adAccountId ?? "").trim();
+  if (!accountKey) return null;
 
   return db
     .prepare(
-      `SELECT date,
-              account_id AS accountId,
+       `SELECT date,
+               ad_account_id AS adAccountId,
+               ad_account_name AS adAccountName,
+               account_id AS accountId,
               spend,
               impressions,
               clicks,
@@ -1562,14 +1657,15 @@ export function getMetaAdsDailyMetrics(date) {
               conversions,
               purchase_value AS purchaseValue,
               roas,
-              currency,
+               currency,
+               usd_ars_rate AS usdArsRate,
               source,
               raw_json AS rawJson,
               updated_at AS updatedAt
        FROM meta_ads_daily_metrics
-       WHERE date = ?`
+        WHERE date = ? AND ad_account_id = ?`
     )
-    .get(key) ?? null;
+    .get(key, accountKey) ?? null;
 }
 
 export function listMetaAdsDailyMetricsRange(filters = {}) {
@@ -1577,6 +1673,11 @@ export function listMetaAdsDailyMetricsRange(filters = {}) {
   const params = [];
   const from = String(filters.from ?? "").trim();
   const to = String(filters.to ?? "").trim();
+  const adAccountId = String(filters.adAccountId ?? "").trim();
+
+  if (!adAccountId) return [];
+  conditions.push("ad_account_id = ?");
+  params.push(adAccountId);
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
     conditions.push("date >= ?");
@@ -1592,7 +1693,9 @@ export function listMetaAdsDailyMetricsRange(filters = {}) {
   return db
     .prepare(
       `SELECT date,
-              account_id AS accountId,
+               ad_account_id AS adAccountId,
+               ad_account_name AS adAccountName,
+               account_id AS accountId,
               spend,
               impressions,
               clicks,
@@ -1601,7 +1704,8 @@ export function listMetaAdsDailyMetricsRange(filters = {}) {
               conversions,
               purchase_value AS purchaseValue,
               roas,
-              currency,
+               currency,
+               usd_ars_rate AS usdArsRate,
               source,
               raw_json AS rawJson,
               updated_at AS updatedAt
@@ -1610,6 +1714,30 @@ export function listMetaAdsDailyMetricsRange(filters = {}) {
        ORDER BY date ASC`
     )
     .all(...params);
+}
+
+export function listUnassignedMetaAdsMetrics() {
+  return db
+    .prepare(
+      `SELECT date, spend, impressions, clicks, conversions, purchase_value AS purchaseValue
+       FROM meta_ads_daily_metrics
+       WHERE ad_account_id = ''
+       ORDER BY date ASC`
+    )
+    .all();
+}
+
+export function deleteUnassignedMetaAdsDailyMetrics(date) {
+  const key = String(date ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return false;
+  return db.prepare("DELETE FROM meta_ads_daily_metrics WHERE date = ? AND ad_account_id = ''").run(key).changes > 0;
+}
+
+export function deleteMetaAdsDailyMetrics(date, adAccountId) {
+  const key = String(date ?? "").trim();
+  const accountKey = String(adAccountId ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !accountKey) return false;
+  return db.prepare("DELETE FROM meta_ads_daily_metrics WHERE date = ? AND ad_account_id = ?").run(key, accountKey).changes > 0;
 }
 
 export function getMetaConversionEvent(eventId) {

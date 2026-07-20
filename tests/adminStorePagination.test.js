@@ -63,3 +63,36 @@ test("conversation summaries filter and paginate inside SQLite", async () => {
 
   db.close();
 });
+
+test("dashboard summaries prioritize the latest conversions before recent activity", async () => {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-dashboard-conversions-"));
+  process.env.CRM_DATA_DIR = dataDir;
+  const store = await import(`../src/store.js?dashboard-conversions=${Date.now()}`);
+  const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
+  const insertContact = db.prepare(
+    "INSERT INTO contacts (phone_number, name, paid, paid_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+  );
+  const oldPayment = "2026-07-10T09:00:00.000Z";
+  const latestPayment = "2026-07-16T15:00:00.000Z";
+  const latestActivity = "2026-07-17T20:00:00.000Z";
+
+  insertContact.run("+549110000001", "Latest conversion", 1, latestPayment, oldPayment, oldPayment);
+  insertContact.run("+549110000002", "Older conversion", 1, oldPayment, oldPayment, latestActivity);
+  insertContact.run("+549110000003", "Latest conversation", 0, null, oldPayment, latestActivity);
+  insertContact.run("+549110000004", "Older conversation", 0, null, oldPayment, oldPayment);
+
+  const prioritized = store.listConversationSummaries({ limit: 4, prioritizeConversions: true });
+  assert.deepEqual(prioritized.map((conversation) => conversation.name), [
+    "Latest conversion",
+    "Older conversion",
+    "Latest conversation",
+    "Older conversation",
+  ]);
+
+  const latestOnly = store.listConversationSummaries({ limit: 2 });
+  assert.deepEqual(latestOnly.map((conversation) => conversation.name), [
+    "Older conversion",
+    "Latest conversation",
+  ]);
+  db.close();
+});

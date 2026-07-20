@@ -74,6 +74,9 @@ Core variables:
 | `OPENAI_API_KEY` | OpenAI API credential |
 | `ZERNIO_API_KEY` | Zernio API credential |
 | `ZERNIO_ACCOUNT_ID` | Default Zernio account |
+| `ZERNIO_META_ADS_ACCOUNT_ID` | Zernio integration used to access Meta Ads APIs |
+| `META_PRIMARY_AD_ACCOUNT_ID` | Sole platform ad account displayed and queried; defaults to Ofiprof `act_1628380711555551` |
+| `ZERNIO_META_ADS_SOURCE` | Optional Meta Ads source filter; defaults to `all` |
 | `ADMIN_TOKEN` | Required admin credential in production |
 | `PUBLIC_BASE_URL` | Public HTTPS origin used for media URLs |
 | `CRM_DATA_DIR` | Optional SQLite data directory override |
@@ -81,6 +84,16 @@ Core variables:
 | `ADMIN_ADS_CACHE_TTL_MS` | Ads dashboard cache duration; default 5 minutes |
 
 The complete non-secret template is in `.env.example`.
+
+### CTWA attribution
+
+Sales are linked to Meta Ads through the CTWA source ID delivered by Zernio. In the Ads section, the protected `Sincronizar atribución` action paginates connected WhatsApp, Instagram, and Facebook inboxes and preserves the first ad attribution captured for each contact. Enable `CTWA_BACKFILL_ENABLED=true` only to refresh the newest inbox page during normal Admin use; use the manual action for historical recovery so the dashboard does not repeatedly scan every page.
+
+### Meta Ads currency
+
+The Ads views query only the configured `META_PRIMARY_AD_ACCOUNT_ID`. Ofiprof reports advertising spend in native USD, so campaign, ad, and spend values remain visible in USD. Profitability metrics compare that spend with ARS revenue by converting it internally with the configured `usd_ars_rate`; each persisted daily metric stores the rate applied when it was refreshed.
+
+Daily metrics are isolated by platform ad-account ID. Rows created before this schema are retained without an account assignment and are not mixed into Ofiprof reporting. Opening Dashboard or Income progressively re-fetches every legacy date from Meta; an unassigned row is removed only after its identified Ofiprof replacement has been persisted.
 
 ## Development
 
