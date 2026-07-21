@@ -17,6 +17,13 @@ export function shouldRunCtwaBackfill(options = {}) {
   return parseBoolean(env.CTWA_BACKFILL_ENABLED);
 }
 
+export function shouldProcessCtwaBackfillConversation(conversation, options = {}) {
+  const conversationIds = new Set((options.conversationIds ?? [])
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean));
+  return !conversationIds.size || conversationIds.has(String(conversation?.id ?? "").trim());
+}
+
 export async function consumeInboxConversationPages(fetchPage, options = {}) {
   const limit = Math.min(100, Math.max(1, Number(options.limit) || 100));
   const maxPages = Math.max(1, Number(options.maxPages) || 1);

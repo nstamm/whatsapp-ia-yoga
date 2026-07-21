@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { consumeInboxConversationPages, shouldRunCtwaBackfill } from "../src/ctwaBackfill.js";
+import { consumeInboxConversationPages, shouldProcessCtwaBackfillConversation, shouldRunCtwaBackfill } from "../src/ctwaBackfill.js";
 
 test("skips backfill by default", () => {
   assert.equal(shouldRunCtwaBackfill({ env: {} }), false);
@@ -14,6 +14,12 @@ test("enables backfill when the explicit query flag is provided", () => {
 test("enables backfill when the environment flag is set", () => {
   assert.equal(shouldRunCtwaBackfill({ env: { CTWA_BACKFILL_ENABLED: "true" } }), true);
   assert.equal(shouldRunCtwaBackfill({ env: { CTWA_BACKFILL_ENABLED: "1" } }), true);
+});
+
+test("targeted recovery only processes the exact Zernio conversation", () => {
+  assert.equal(shouldProcessCtwaBackfillConversation({ id: "conversation-a" }, { conversationIds: ["conversation-a"] }), true);
+  assert.equal(shouldProcessCtwaBackfillConversation({ id: "conversation-b" }, { conversationIds: ["conversation-a"] }), false);
+  assert.equal(shouldProcessCtwaBackfillConversation({ id: "conversation-b" }), true);
 });
 
 test("consumes every cursor page until Zernio reports no more conversations", async () => {

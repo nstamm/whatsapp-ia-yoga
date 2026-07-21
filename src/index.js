@@ -9,7 +9,8 @@ import {
   getAIResponse,
   transcribeAudioFromUrl,
 } from "./claude.js";
-import { consumeInboxConversationPages, shouldRunCtwaBackfill } from "./ctwaBackfill.js";
+import { consumeInboxConversationPages, shouldProcessCtwaBackfillConversation, shouldRunCtwaBackfill } from "./ctwaBackfill.js";
+import { BUSINESS_TIME_ZONE, businessDateKey as localDateKey, parseBusinessDateKey as parseDateKey, shiftBusinessDateKey as shiftDateKey } from "./businessDate.js";
 import { buildConversationFlow, validateFlowSettings } from "./conversationFlow.js";
 import { adminSectionDataNeeds, buildAdminConversationQuery, createAsyncTtlCache, isFreshTimestamp, isValidDateKey, mapWithConcurrency } from "./adminPerformance.js";
 import { DEFAULT_META_AD_ACCOUNT_NAME, hasMetaAdsActivity, metaSpendInArs, primaryMetaAdAccountId, selectPrimaryMetaAdAccount, shouldReplaceLegacyMetaAdsMetrics } from "./metaAdsPolicy.js";
@@ -49,6 +50,7 @@ import {
   recordPayment,
   reverseLatestPayment,
   listPayments,
+  listRecentPaidContactsMissingCtwaAttribution,
   listCtwaHourlyStats,
   listCtwaAttributedPayments,
   listCtwaCohortAttributedPayments,
@@ -131,6 +133,7 @@ let latestAdsDashboard = null;
 const metaAdsRefreshes = new Map();
 let ctwaBackfillRequest = null;
 let lastCtwaBackfillAt = 0;
+const ctwaRecoveryTimers = new Map();
 const adsDashboardCache = createAsyncTtlCache({
   ttlMs: Math.max(30_000, Number.parseInt(process.env.ADMIN_ADS_CACHE_TTL_MS ?? "300000", 10) || 300_000),
   maxEntries: 20,
@@ -1021,17 +1024,7 @@ function formatDateTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
 
-  return date.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
-}
-
-function localDateKey(date = new Date()) {
-  const value = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(value.getTime())) return localDateKey();
-
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return date.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short", timeZone: BUSINESS_TIME_ZONE });
 }
 
 function isFutureDateKey(dateKey, todayKey = localDateKey()) {
@@ -1043,30 +1036,15 @@ function isRecentMetaAdsDate(dateKey, todayKey = localDateKey()) {
   return key >= shiftDateKey(todayKey, -1) && key <= todayKey;
 }
 
-function parseDateKey(value, fallback = new Date()) {
-  const raw = String(value ?? "").trim();
-  if (!isValidDateKey(raw)) return new Date(localDateKey(fallback) + "T00:00:00");
-
-  const date = new Date(`${raw}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? new Date(localDateKey(fallback) + "T00:00:00") : date;
-}
-
-function shiftDateKey(dateKey, days) {
-  const date = parseDateKey(dateKey);
-  date.setDate(date.getDate() + days);
-  return localDateKey(date);
-}
-
 function dateRangeKeys(fromKey, toKey) {
-  const from = parseDateKey(fromKey);
-  const to = parseDateKey(toKey);
-  if (from > to) return dateRangeKeys(toKey, fromKey);
+  let current = isValidDateKey(fromKey) ? String(fromKey) : localDateKey();
+  const end = isValidDateKey(toKey) ? String(toKey) : localDateKey();
+  if (current > end) return dateRangeKeys(end, current);
 
   const keys = [];
-  const current = new Date(from);
-  while (current <= to) {
-    keys.push(localDateKey(current));
-    current.setDate(current.getDate() + 1);
+  while (current <= end) {
+    keys.push(current);
+    current = shiftDateKey(current, 1);
   }
   return keys;
 }
@@ -1806,11 +1784,15 @@ async function buildAdsDashboard(req) {
     const attributedPayments = listCtwaCohortAttributedPayments({ from: fromDate, to: toDate });
     const totalPayments = listPayments({ from: fromDate, to: toDate });
     const adRows = buildAdRowsFromCampaigns(campaigns, attributed, attributedPayments, usdArsRate);
+    const paymentsWithSource = new Set(paidPeriodAttributedPayments.map((payment) => payment.id));
+    const currentAdIds = new Set(flattenAdsFromCampaigns(campaigns).map((ad) => String(ad.platformAdId ?? "")));
+    const pendingAttributionPayments = totalPayments.filter((payment) => !paymentsWithSource.has(payment.id));
+    const unassignedAttributionPayments = paidPeriodAttributedPayments.filter((payment) => !currentAdIds.has(String(payment.ctwaSourceId ?? "")));
     const periodRange = { fromDate, toDate, label: range.label };
     const hourlyInsights = buildHourlyInsights(listCtwaHourlyStats({ from: fromDate, to: toDate }));
     const recommendations = buildAdsRecommendations(adRows, adRows, hourlyInsights);
 
-    latestAdsDashboard = { ...empty, selectedAdAccountId, adAccounts: selectedAccounts, rows: allRows, totalsByCurrency, campaigns, adRows, monthlyAdRows: adRows, monthRange: periodRange, hourlyInsights, recommendations, totalPayments, attributedPayments, monthlyAttributedPayments: attributedPayments, paidPeriodAttributedPayments, error: "" };
+    latestAdsDashboard = { ...empty, selectedAdAccountId, adAccounts: selectedAccounts, rows: allRows, totalsByCurrency, campaigns, adRows, monthlyAdRows: adRows, monthRange: periodRange, hourlyInsights, recommendations, totalPayments, attributedPayments, monthlyAttributedPayments: attributedPayments, paidPeriodAttributedPayments, pendingAttributionPayments, unassignedAttributionPayments, error: "" };
     return latestAdsDashboard;
   } catch (err) {
     console.warn("⚠️ Could not build Ads dashboard:", err.message);
@@ -1852,9 +1834,10 @@ async function backfillCtwaAttribution(options = {}) {
     if (!targets.some((target) => target.accountId === id && target.platform === channel)) targets.push({ accountId: id, platform: channel });
   };
 
-  addTarget(process.env.ZERNIO_WHATSAPP_ACCOUNT_ID || process.env.ZERNIO_ACCOUNT_ID, "whatsapp");
+  for (const target of options.targets ?? []) addTarget(target.accountId, target.platform);
+  if (!targets.length) addTarget(process.env.ZERNIO_WHATSAPP_ACCOUNT_ID || process.env.ZERNIO_ACCOUNT_ID, "whatsapp");
 
-  try {
+  if (!options.targets?.length) try {
     const accountsPayload = await listZernioAccounts();
     const accounts = Array.isArray(accountsPayload?.accounts) ? accountsPayload.accounts : [];
     for (const account of accounts) {
@@ -1880,9 +1863,10 @@ async function backfillCtwaAttribution(options = {}) {
         {
           limit: options.limit || 100,
           maxPages,
-          onPage: (conversations) => {
-            for (const conversation of conversations) {
-              const attribution = extractCtwaAttribution({ conversation });
+            onPage: (conversations) => {
+              for (const conversation of conversations) {
+                if (!shouldProcessCtwaBackfillConversation(conversation, options)) continue;
+                const attribution = extractCtwaAttribution({ conversation });
               if (!attribution?.ctwaSourceId) continue;
               attributed += 1;
 
@@ -1918,6 +1902,58 @@ async function backfillCtwaAttribution(options = {}) {
   }
 
   return { pages, conversations: conversationsRead, attributed, saved, errors };
+}
+
+function queueCtwaAttributionRecovery(phoneNumber, contact) {
+  const sourceId = contact.ctwa_source_id ?? contact.ctwaSourceId;
+  const conversationId = contact.conversation_id ?? contact.conversationId;
+  const accountId = contact.account_id ?? contact.accountId;
+  if (sourceId || !conversationId || ctwaRecoveryTimers.has(phoneNumber)) return;
+
+  const target = {
+    accountId: accountId || process.env.ZERNIO_WHATSAPP_ACCOUNT_ID || process.env.ZERNIO_ACCOUNT_ID,
+    platform: contact.channel || "whatsapp",
+  };
+  const delays = [0, 5 * 60_000, 30 * 60_000];
+  const maxPages = Math.max(1, Number(process.env.CTWA_PAYMENT_RECOVERY_MAX_PAGES) || 10);
+  let attempt = 0;
+
+  const recover = async () => {
+    const current = getContact(phoneNumber);
+    if (current.ctwa_source_id || !current.conversation_id) {
+      ctwaRecoveryTimers.delete(phoneNumber);
+      return;
+    }
+
+    try {
+      await backfillCtwaAttribution({
+        targets: [target],
+        conversationIds: [current.conversation_id],
+        maxPages,
+      });
+      if (getContact(phoneNumber).ctwa_source_id) {
+        console.log(`📈 CTWA attribution recovered for paid contact ${phoneNumber}`);
+      }
+    } catch (err) {
+      console.warn(`⚠️ CTWA attribution recovery failed for ${phoneNumber}:`, err.message);
+    }
+
+    attempt += 1;
+    if (attempt >= delays.length || getContact(phoneNumber).ctwa_source_id) {
+      ctwaRecoveryTimers.delete(phoneNumber);
+      return;
+    }
+    ctwaRecoveryTimers.set(phoneNumber, setTimeout(recover, delays[attempt]));
+  };
+
+  ctwaRecoveryTimers.set(phoneNumber, setTimeout(recover, delays[attempt]));
+}
+
+function queueRecentCtwaAttributionRecovery() {
+  const since = new Date(Date.now() - 72 * 60 * 60_000).toISOString();
+  for (const contact of listRecentPaidContactsMissingCtwaAttribution({ since })) {
+    queueCtwaAttributionRecovery(contact.phoneNumber, contact);
+  }
 }
 
 function phoneDigits(value) {
@@ -2901,6 +2937,8 @@ function renderAdsDashboard(req, adsDashboard) {
   const crmSales = (adsDashboard.adRows ?? []).reduce((total, ad) => total + (Number(ad.crmSales) || 0), 0);
   const crmRevenue = (adsDashboard.adRows ?? []).reduce((total, ad) => total + (Number(ad.crmRevenue) || 0), 0);
   const paidPeriodAttributedSales = (adsDashboard.paidPeriodAttributedPayments ?? []).length;
+  const pendingAttributionSales = (adsDashboard.pendingAttributionPayments ?? []).length;
+  const unassignedAttributionSales = (adsDashboard.unassignedAttributionPayments ?? []).length;
   const alertCount = (adsDashboard.adRows ?? []).filter((ad) => ["danger", "warn"].includes(ad.alert?.tone)).length;
   const nativeCostPerChat = crmChats ? nativeSpend / crmChats : 0;
   const nativeCostPerMetaChat = metaChats ? nativeSpend / metaChats : 0;
@@ -2936,7 +2974,7 @@ function renderAdsDashboard(req, adsDashboard) {
     <div class="hero-kpi-grid ads-currency-grid">
       ${renderHeroKpiCard("Gasto", formatAdMoney(nativeSpend, nativeCurrency), `${metaChats} chats Meta · ${crmChats} CRM atribuidos`, nativeSpend ? "warn" : "", "roas")}
       ${renderHeroKpiCard("Costo por chat", metaChats ? formatAdMoney(nativeCostPerMetaChat, nativeCurrency) : crmChats ? formatAdMoney(nativeCostPerChat, nativeCurrency) : "-", metaChats ? "sobre chats oficiales Meta" : "sobre chats CRM atribuidos", costPerMetaChatArs && costPerMetaChatArs < 1800 ? "good" : costPerMetaChatArs ? "warn" : "", "volume")}
-      ${renderHeroKpiCard("Ventas Ads cohorte", String(crmSales), `${formatMoney(crmRevenue)} · leads iniciados en período · ${channelText}`, crmSales ? "good" : "warn", "sales")}
+      ${renderHeroKpiCard("Ventas Ads cohorte", String(crmSales), `${formatMoney(crmRevenue)} · ${pendingAttributionSales} sin origen CTWA · ${unassignedAttributionSales} fuera de Ofiprof USD`, crmSales ? "good" : "warn", "sales")}
       ${renderHeroKpiCard("ROAS cohorte", formatMultiple(realRoas), `${paidPeriodAttributedSales} ventas Ads cobradas en período · ${alertCount} alertas`, realRoas >= 1 ? "good" : spendArs ? "warn" : "", "interest")}
     </div>
     <section class="quality-insight-grid">
@@ -4336,6 +4374,7 @@ app.post("/admin/contacts/:phoneNumber/paid", requireAdmin, async (req, res) => 
     discount,
     note: req.body.note ?? "",
   });
+  queueCtwaAttributionRecovery(phoneNumber, contactBeforePayment);
   sendPurchaseConversionForPayment(paymentId, phoneNumber, {
     conversationId: contactBeforePayment.conversation_id,
     amount,
@@ -4581,6 +4620,7 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
         discount,
         note: proofDetails.isPaymentProof ? "Comprobante detectado automaticamente" : "Comprobante registrado automaticamente",
       });
+      queueCtwaAttributionRecovery(phoneNumber, contact);
       sendPurchaseConversionForPayment(paymentId, phoneNumber, { conversationId, amount, contact }).catch((err) => {
         console.warn(`⚠️ Meta conversion background task failed for ${phoneNumber}:`, err.message);
       });
@@ -4836,6 +4876,8 @@ setTimeout(() => {
     console.error("❌ Reminder worker error:", err.message);
   });
 }, 5_000);
+
+setTimeout(queueRecentCtwaAttributionRecovery, 10_000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT ?? 3000;

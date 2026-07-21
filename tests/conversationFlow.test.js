@@ -29,7 +29,7 @@ test("flow keeps all core runtime stages visible", () => {
   const nodeIds = new Set(CONVERSATION_FLOW.nodes.map((node) => node.id));
   const requiredStages = [
     "incoming", "routing", "greeting", "product", "preview", "reminder",
-    "payment", "delivery", "paid", "manual", "handoff",
+    "payment", "attribution-recovery", "delivery", "paid", "manual", "handoff",
   ];
 
   for (const stage of requiredStages) assert.equal(nodeIds.has(stage), true, `missing flow stage: ${stage}`);

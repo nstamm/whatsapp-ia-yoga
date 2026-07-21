@@ -43,3 +43,16 @@ test("reverting the latest payment keeps a contact converted when an earlier pay
   assert.equal(conversation.paid, 1);
   assert.equal(conversation.paymentTotal, 4999);
 });
+
+test("payment reporting uses Argentina business-day bounds instead of the server day", async () => {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-payment-business-day-"));
+  process.env.CRM_DATA_DIR = dataDir;
+  const store = await import(`../src/store.js?payment-business-day=${Date.now()}`);
+
+  store.recordPayment("+5491100099991", { amount: 15000, paidAt: "2026-07-21T00:29:55.000Z", conversationId: "conversation-arg-1" });
+  store.recordPayment("+5491100099992", { amount: 15000, paidAt: "2026-07-21T03:00:00.000Z", conversationId: "conversation-arg-2" });
+
+  assert.equal(store.listPayments({ from: "2026-07-20", to: "2026-07-20" }).length, 1);
+  assert.equal(store.listPayments({ from: "2026-07-21", to: "2026-07-21" }).length, 1);
+  assert.equal(store.listRecentPaidContactsMissingCtwaAttribution({ since: "2026-07-20T00:00:00.000Z" }).length, 2);
+});

@@ -32,14 +32,15 @@ export const CONVERSATION_FLOW = Object.freeze({
     { id: "payment", title: "Comprobante", subtitle: "Detectar y registrar pago", description: "Reconoce adjuntos de pago, extrae los datos disponibles y registra la venta antes de habilitar la entrega del producto.", type: "condition", x: 590, y: 450, media: [
       { type: "audio", label: "Audio de confirmación de comprobante", src: "/media/audios/comprobante.mp3" },
     ] },
-    { id: "delivery", title: "Entregar producto", subtitle: "Confirmación + acceso", description: "Confirma el pago y envía el mensaje de entrega con el enlace de acceso configurado.", type: "message", x: 890, y: 450, fields: ["product_delivery_text", "product_access_url"] },
-    { id: "paid", title: "Soporte comprador", subtitle: "Respuesta post-compra", description: "Para contactos con pago registrado, responde con las reglas especiales de soporte para compradores.", type: "message", x: 1190, y: 450, fields: ["paid_reply_prompt"] },
+    { id: "attribution-recovery", title: "Recuperar origen Ads", subtitle: "Compensación post-pago", description: "Si el webhook no incluyó el origen CTWA, consulta la conversación exacta en Zernio y reintenta en segundo plano. Sólo asigna la venta cuando el ID coincide exactamente con un anuncio de Ofiprof USD.", type: "action", x: 840, y: 450 },
+    { id: "delivery", title: "Entregar producto", subtitle: "Confirmación + acceso", description: "Confirma el pago y envía el mensaje de entrega con el enlace de acceso configurado.", type: "message", x: 1090, y: 450, fields: ["product_delivery_text", "product_access_url"] },
+    { id: "paid", title: "Soporte comprador", subtitle: "Respuesta post-compra", description: "Para contactos con pago registrado, responde con las reglas especiales de soporte para compradores.", type: "message", x: 1390, y: 450, fields: ["paid_reply_prompt"] },
     { id: "manual", title: "Acciones manuales", subtitle: "Liberación y oferta relámpago", description: "Desde el administrador se puede liberar manualmente el acceso o enviar una oferta relámpago al contacto seleccionado.", type: "message", x: 890, y: 640, fields: ["offer_promo_text", "flash_offer_text"] },
     { id: "handoff", title: "Revisión humana", subtitle: "Automatización pausada", description: "Detiene la automatización para que una persona continúe la conversación desde la bandeja de revisiones.", type: "terminal", x: 590, y: 640 },
   ],
   edges: [
     ["incoming", "routing"], ["routing", "greeting"], ["routing", "product"], ["product", "preview"],
-    ["preview", "reminder"], ["routing", "payment"], ["payment", "delivery"], ["delivery", "paid"],
+    ["preview", "reminder"], ["routing", "payment"], ["payment", "attribution-recovery"], ["attribution-recovery", "delivery"], ["delivery", "paid"],
     ["routing", "handoff"], ["manual", "delivery"],
   ],
 });

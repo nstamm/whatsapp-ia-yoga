@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { DatabaseSync } from "node:sqlite";
+import { businessDateRange, isBusinessDateKey } from "./businessDate.js";
 import { measureSync } from "./performanceMetrics.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1466,17 +1467,13 @@ export function listConversationSummaries(options = {}) {
 }
 
 function dateFilterStart(value) {
-  if (!value) return null;
-
-  const date = new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  if (!isBusinessDateKey(value)) return null;
+  return businessDateRange(value).start.toISOString();
 }
 
 function dateFilterEnd(value) {
-  if (!value) return null;
-
-  const date = new Date(`${value}T23:59:59.999`);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  if (!isBusinessDateKey(value)) return null;
+  return businessDateRange(value).end.toISOString();
 }
 
 export function listPayments(filters = {}) {
@@ -1517,6 +1514,33 @@ export function listPayments(filters = {}) {
        ORDER BY paid_at DESC, id DESC
        ${pagination}`
     ), params);
+}
+
+export function listRecentPaidContactsMissingCtwaAttribution(options = {}) {
+  const limit = Math.min(100, Math.max(1, Number(options.limit) || 50));
+  const since = String(options.since ?? "").trim();
+  if (!since) return [];
+
+  return measuredAll("sqlite.ctwa.recovery_candidates", db.prepare(
+    `WITH recent_payments AS (
+       SELECT contact_key, MAX(paid_at) AS paid_at
+       FROM payments
+       WHERE paid_at >= ?
+       GROUP BY contact_key
+     )
+     SELECT c.phone_number AS phoneNumber,
+            c.conversation_id AS conversationId,
+            c.account_id AS accountId,
+            c.channel,
+            c.ctwa_source_id AS ctwaSourceId
+     FROM recent_payments rp
+     JOIN contacts c ON c.contact_key = rp.contact_key
+     WHERE c.paid = 1
+       AND c.ctwa_source_id = ''
+       AND c.conversation_id != ''
+     ORDER BY rp.paid_at DESC
+     LIMIT ?`
+  ), [since, limit]);
 }
 
 export function getAdSpend(date) {
