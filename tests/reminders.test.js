@@ -6,8 +6,16 @@ function isDueReminder(contact, nowIso) {
   if (contact.reminder_sent_at) return false;
 
   return (
-    (contact.reminder_scheduled_at && contact.reminder_scheduled_at <= nowIso) ||
-    (contact.reminder2_scheduled_at && contact.reminder2_scheduled_at <= nowIso)
+    contact.reminder_scheduled_at && contact.reminder_scheduled_at <= nowIso
+  );
+}
+
+function isDueReminder2(contact, nowIso) {
+  if (contact.paid || contact.handoff || contact.promo_sent) return false;
+  if (contact.reminder2_sent_at) return false;
+
+  return (
+    contact.reminder2_scheduled_at && contact.reminder2_scheduled_at <= nowIso
   );
 }
 
@@ -16,6 +24,13 @@ function markReminderSentRow(contact, sentAt) {
     ...contact,
     reminder_sent_at: sentAt,
     reminder_scheduled_at: null,
+  };
+}
+
+function markReminder2SentRow(contact, sentAt) {
+  return {
+    ...contact,
+    reminder2_sent_at: sentAt,
     reminder2_scheduled_at: null,
   };
 }
@@ -45,9 +60,10 @@ test("sent reminder with stale second reminder is not due again", () => {
   };
 
   assert.equal(isDueReminder(contact, now), false);
+  assert.equal(isDueReminder2(contact, now), true);
 });
 
-test("marking reminder sent clears both scheduled reminder fields", () => {
+test("marking reminder sent clears only reminder_scheduled_at", () => {
   const sentAt = "2026-07-11T12:00:00.000Z";
   const contact = {
     reminder_scheduled_at: "2026-07-11T10:00:00.000Z",
@@ -57,6 +73,20 @@ test("marking reminder sent clears both scheduled reminder fields", () => {
   assert.deepEqual(markReminderSentRow(contact, sentAt), {
     reminder_sent_at: sentAt,
     reminder_scheduled_at: null,
+    reminder2_scheduled_at: "2026-07-11T11:00:00.000Z",
+  });
+});
+
+test("marking reminder2 sent clears only reminder2_scheduled_at", () => {
+  const sentAt = "2026-07-11T12:00:00.000Z";
+  const contact = {
+    reminder_scheduled_at: "2026-07-11T10:00:00.000Z",
+    reminder2_scheduled_at: "2026-07-11T11:00:00.000Z",
+  };
+
+  assert.deepEqual(markReminder2SentRow(contact, sentAt), {
+    reminder2_sent_at: sentAt,
+    reminder_scheduled_at: "2026-07-11T10:00:00.000Z",
     reminder2_scheduled_at: null,
   });
 });
@@ -72,8 +102,8 @@ test("second scheduled reminder is due only before it has been marked sent", () 
     reminder2_scheduled_at: "2026-07-11T11:00:00.000Z",
   };
 
-  assert.equal(isDueReminder(contact, now), true);
-  assert.equal(isDueReminder(markReminderSentRow(contact, now), now), false);
+  assert.equal(isDueReminder2(contact, now), true);
+  assert.equal(isDueReminder2(markReminder2SentRow(contact, now), now), false);
 });
 
 test("outside allowed window is treated as permanent reminder send failure", () => {

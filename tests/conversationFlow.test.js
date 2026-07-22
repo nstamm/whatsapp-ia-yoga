@@ -28,7 +28,7 @@ test("every editable flow setting is represented by exactly one node", () => {
 test("flow keeps all core runtime stages visible", () => {
   const nodeIds = new Set(CONVERSATION_FLOW.nodes.map((node) => node.id));
   const requiredStages = [
-    "incoming", "routing", "greeting", "product", "preview", "reminder",
+    "incoming", "routing", "greeting", "product", "preview", "reminder", "reminder23h",
     "payment", "attribution-recovery", "delivery", "paid", "manual", "handoff",
   ];
 

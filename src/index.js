@@ -59,7 +59,9 @@ import {
   getSetting,
   scheduleReminder,
   listDueReminders,
+  listDueReminder2s,
   markReminderSent,
+  markReminder2Sent,
   markProductReleased,
   saveContactCtwaAttribution,
   listCtwaAttributedConversations,
@@ -864,36 +866,105 @@ async function processDueReminders() {
     }
 
     if (!contact.conversation_id) {
-      console.warn(`⚠️ Reminder skipped for ${contact.phone_number}: missing conversationId`);
+      console.warn(`⚠️ 6h reminder skipped for ${contact.phone_number}: missing conversationId`);
       continue;
     }
 
     try {
+      const options = zernioOptionsFor(contact);
+
       const audioSent = await sendFlowAudio(null, contact.conversation_id, contact.phone_number, "reminder23h", false, contact);
       if (audioSent) {
-        addMessage(contact.phone_number, "assistant", "[audio recordatorio 23h]", { conversationId: contact.conversation_id });
-        markReminderSent(contact.phone_number);
-        console.log(`📣 23h audio reminder sent to ${contact.phone_number}`);
-        continue;
+        addMessage(contact.phone_number, "assistant", "[audio recordatorio 6h]", { conversationId: contact.conversation_id });
       }
 
-      const text = getSetting("followup_reminder_text", "").trim();
-      if (!text) continue;
-
-      try {
-        await sendTypingIndicator(contact.conversation_id, zernioOptionsFor(contact));
-      } catch (typingErr) {
-        console.warn(`⚠️ Typing indicator failed before reminder fallback for ${contact.phone_number}:`, typingErr.message);
+      const detailText = getSetting("reminder_detail_text", "").trim();
+      if (detailText) {
+        try {
+          await sendTypingIndicator(contact.conversation_id, options);
+        } catch (typingErr) {
+          console.warn(`⚠️ Typing indicator failed before 6h detail for ${contact.phone_number}:`, typingErr.message);
+        }
+        await sleep(humanDelayFor(detailText));
+        await sendWhatsAppMessage(contact.conversation_id, detailText, options);
+        addMessage(contact.phone_number, "assistant", detailText, { conversationId: contact.conversation_id });
       }
 
-      await sleep(humanDelayFor(text));
-      await sendWhatsAppMessage(contact.conversation_id, text, zernioOptionsFor(contact));
-      addMessage(contact.phone_number, "assistant", text, { conversationId: contact.conversation_id });
+      const productDesc = getSetting("reminder_product_description", "").trim();
+      if (productDesc) {
+        await sleep(900);
+        try {
+          await sendTypingIndicator(contact.conversation_id, options);
+        } catch (typingErr) {
+          console.warn(`⚠️ Typing indicator failed before 6h product desc for ${contact.phone_number}:`, typingErr.message);
+        }
+        await sleep(humanDelayFor(productDesc));
+        await sendWhatsAppMessage(contact.conversation_id, productDesc, options);
+        addMessage(contact.phone_number, "assistant", productDesc, { conversationId: contact.conversation_id });
+      }
+
+      if (!audioSent && !detailText && !productDesc) {
+        const fallbackText = getSetting("followup_reminder_text", "").trim();
+        if (!fallbackText) continue;
+
+        try {
+          await sendTypingIndicator(contact.conversation_id, options);
+        } catch (typingErr) {
+          console.warn(`⚠️ Typing indicator failed before 6h fallback for ${contact.phone_number}:`, typingErr.message);
+        }
+        await sleep(humanDelayFor(fallbackText));
+        await sendWhatsAppMessage(contact.conversation_id, fallbackText, options);
+        addMessage(contact.phone_number, "assistant", fallbackText, { conversationId: contact.conversation_id });
+      }
+
       markReminderSent(contact.phone_number);
-      console.log(`📣 23h fallback text reminder sent to ${contact.phone_number}`);
+      console.log(`📣 6h reminder sent to ${contact.phone_number}`);
     } catch (err) {
       if (isPermanentReminderSendError(err)) {
         markReminderSent(contact.phone_number);
+        console.warn(`⏭️ 6h reminder stopped for ${contact.phone_number}: ${err.message}`);
+        continue;
+      }
+
+      console.error(`❌ Error sending 6h reminder to ${contact.phone_number}:`, err.message);
+    }
+  }
+}
+
+async function processDueReminder2s() {
+  const due = listDueReminder2s();
+
+  for (const contact of due) {
+    const freshContact = getContact(contact.phone_number);
+    if (freshContact.paid || freshContact.handoff || freshContact.promo_sent) {
+      continue;
+    }
+
+    if (!contact.conversation_id) {
+      console.warn(`⚠️ 23h reminder skipped for ${contact.phone_number}: missing conversationId`);
+      continue;
+    }
+
+    try {
+      const text = getSetting("reminder2_offer_text", "").trim();
+      if (!text) continue;
+
+      const options = zernioOptionsFor(contact);
+
+      try {
+        await sendTypingIndicator(contact.conversation_id, options);
+      } catch (typingErr) {
+        console.warn(`⚠️ Typing indicator failed before 23h offer for ${contact.phone_number}:`, typingErr.message);
+      }
+
+      await sleep(humanDelayFor(text));
+      await sendWhatsAppMessage(contact.conversation_id, text, options);
+      addMessage(contact.phone_number, "assistant", text, { conversationId: contact.conversation_id });
+      markReminder2Sent(contact.phone_number);
+      console.log(`📣 23h offer sent to ${contact.phone_number}`);
+    } catch (err) {
+      if (isPermanentReminderSendError(err)) {
+        markReminder2Sent(contact.phone_number);
         console.warn(`⏭️ 23h reminder stopped for ${contact.phone_number}: ${err.message}`);
         continue;
       }
@@ -2363,8 +2434,7 @@ function renderPaymentActions(req, phoneNumber, section, conversation) {
   }
 
   return `<div class="quick-actions">
-    ${!promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-promo">${adminHiddenFields(req, { section })}<button type="submit" class="accent">Liberar producto $14999</button></form>` : ""}
-    ${!promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-flash">${adminHiddenFields(req, { section })}<button type="submit" class="bomb">Bombazo $4999</button></form>` : ""}
+    ${!promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-flash">${adminHiddenFields(req, { section })}<button type="submit" class="bomb">Bombazo $6999</button></form>` : ""}
     <form method="post" action="/admin/contacts/${encodedPhone}/paid">${baseFields}<button type="submit">${formatMoneyShort(PAYMENT_PRODUCTS.base.amount)}</button></form>
     <form method="post" action="/admin/contacts/${encodedPhone}/paid">${promoPayFields}<button type="submit">${formatMoneyShort(PAYMENT_PRODUCTS.promo.amount)}</button></form>
     <form method="post" action="/admin/contacts/${encodedPhone}/trigger-flow">${adminHiddenFields(req, { section })}<button type="submit" class="secondary">Iniciar flujo</button></form>
@@ -3931,9 +4001,11 @@ function renderAdminPage(req, context = {}) {
               <label class="wide">Regla del primer mensaje<textarea name="first_reply_prompt">${escapeHtml(settings.first_reply_prompt)}</textarea></label>
               <label class="wide">Regla de respuestas siguientes<textarea name="next_reply_prompt">${escapeHtml(settings.next_reply_prompt)}</textarea></label>
               <label class="wide">Regla para compradores<textarea name="paid_reply_prompt">${escapeHtml(settings.paid_reply_prompt)}</textarea></label>
-              <label class="wide">Texto fallback recordatorio 23h<textarea name="followup_reminder_text">${escapeHtml(settings.followup_reminder_text ?? "")}</textarea></label>
-              <label class="wide">Mensaje manual para liberar producto<textarea name="offer_promo_text">${escapeHtml(settings.offer_promo_text ?? "")}</textarea></label>
-              <label class="wide">Mensaje Bombazo $4999<textarea name="flash_offer_text">${escapeHtml(settings.flash_offer_text ?? "")}</textarea></label>
+              <label class="wide">Texto fallback recordatorio (audio falla)<textarea name="followup_reminder_text">${escapeHtml(settings.followup_reminder_text ?? "")}</textarea></label>
+              <label class="wide">Texto recordatorio 6h (después del audio)<textarea name="reminder_detail_text">${escapeHtml(settings.reminder_detail_text ?? "")}</textarea></label>
+              <label class="wide">Descripción del producto 6h<textarea name="reminder_product_description">${escapeHtml(settings.reminder_product_description ?? "")}</textarea></label>
+              <label class="wide">Oferta 23h (descuento automático)<textarea name="reminder2_offer_text">${escapeHtml(settings.reminder2_offer_text ?? "")}</textarea></label>
+              <label class="wide">Mensaje Bombazo $6999<textarea name="flash_offer_text">${escapeHtml(settings.flash_offer_text ?? "")}</textarea></label>
               <label class="wide">Link de acceso al producto<input name="product_access_url" value="${escapeHtml(settings.product_access_url)}"></label>
               <label class="wide">Mensaje de entrega post-pago<textarea name="product_delivery_text">${escapeHtml(settings.product_delivery_text)}</textarea></label>
               <label class="wide">Pixel/Dataset Meta para conversiones IG/FB<input name="meta_ads_destination_id" value="${escapeHtml(settings.meta_ads_destination_id ?? "")}" placeholder="ID del Pixel o Dataset"></label>
@@ -4351,10 +4423,6 @@ async function sendManualProductRelease(req, res, settingKey, successStatus) {
   }
 }
 
-app.post("/admin/contacts/:phoneNumber/offer-promo", requireAdmin, async (req, res) => {
-  await sendManualProductRelease(req, res, "offer_promo_text", "promo_offered");
-});
-
 app.post("/admin/contacts/:phoneNumber/offer-flash", requireAdmin, async (req, res) => {
   await sendManualProductRelease(req, res, "flash_offer_text", "flash_offered");
 });
@@ -4489,8 +4557,10 @@ app.post("/admin/settings", requireAdmin, (req, res) => {
     next_reply_prompt: req.body.next_reply_prompt ?? "",
     paid_reply_prompt: req.body.paid_reply_prompt ?? "",
     followup_reminder_text: req.body.followup_reminder_text ?? "",
+    reminder_detail_text: req.body.reminder_detail_text ?? "",
+    reminder_product_description: req.body.reminder_product_description ?? "",
+    reminder2_offer_text: req.body.reminder2_offer_text ?? "",
     ask_name_text: req.body.ask_name_text ?? "",
-    offer_promo_text: req.body.offer_promo_text ?? "",
     flash_offer_text: req.body.flash_offer_text ?? "",
     product_access_url: req.body.product_access_url ?? "",
     product_delivery_text: req.body.product_delivery_text ?? "",
@@ -4871,9 +4941,21 @@ setInterval(() => {
   });
 }, 30_000);
 
+setInterval(() => {
+  processDueReminder2s().catch((err) => {
+    console.error("❌ Reminder2 worker error:", err.message);
+  });
+}, 30_000);
+
 setTimeout(() => {
   processDueReminders().catch((err) => {
     console.error("❌ Reminder worker error:", err.message);
+  });
+}, 5_000);
+
+setTimeout(() => {
+  processDueReminder2s().catch((err) => {
+    console.error("❌ Reminder2 worker error:", err.message);
   });
 }, 5_000);
 

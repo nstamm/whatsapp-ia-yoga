@@ -135,6 +135,51 @@ const DEFAULT_FOLLOWUP_REMINDER_TEXT = `holaa, pudiste ver el material? sigue ac
 
 cualquier cosa estoy por acá`;
 
+const DEFAULT_REMINDER_DETAIL_TEXT = "holaa, te mando por acá el detalle porque antes te mandé solo el video 🪴";
+
+const DEFAULT_REMINDER_PRODUCT_DESCRIPTION = `Te cuento bien qué incluye la oferta:
+
+El Kit Profe de Yoga-Pro es un sistema completo para que puedas planificar tus clases, organizar a tus alumnos y trabajar con más seguridad, sin perder horas buscando ideas o improvisando.
+
+Incluye:
+
+✅ 6 tomos en PDF
+✅ 36 módulos, desde nivel básico hasta avanzado
+✅ Más de 250 páginas
+✅ Secuencias, posturas, alineación y planificación de clases
+✅ Yoga terapéutico y adaptativo
+✅ Pranayama, meditación y filosofía
+✅ 6 videos explicativos
+✅ 6 cuestionarios para fijar los contenidos
+
+Además, te llevás los 3 Bonos de Productividad:
+
+📁 Carpeta del Profesor: fichas médicas, asistencia, pagos, recibos y planificación anual.
+
+📣 De Profe a Centro de Yoga: flyers, guiones de WhatsApp, clases abiertas y sistema de referidos para conseguir alumnos.
+
+🧘‍♀️ Creación de Talleres Especiales: 8 talleres listos para ofrecer, con cronograma, precios orientativos y guiones de venta.
+
+También incluyen sus versiones en audio para que puedas escucharlos cuando quieras.
+
+En total recibís:
+
+9 PDFs + 6 videos + 6 cuestionarios + 3 audios
+
+El acceso es inmediato, el material es descargable y podés usarlo desde el celular, tablet o computadora.
+
+El valor habitual del paquete completo es de $49.999, pero hoy podés llevarte el Kit completo más los 3 bonos por un único pago de $14.999.
+
+Tenés además 7 días de garantía.
+
+La idea es que tengas todo tu año de yoga resuelto: menos tiempo planificando y más energía para tus clases 🪴`;
+
+const DEFAULT_REMINDER2_OFFER_TEXT = `¡Hola! Queremos que el dinero no sea un obstáculo y que este material llegue a todas las personas que lo necesiten.
+
+Por eso, podés llevarte el Kit completo + los 3 bonos por solo $6.999.
+
+Cualquier cosa, acá estamos 🌿`;
+
 const DEFAULT_PAID_REPLY_PROMPT =
   "Esta persona ya compro el Kit Yoga Pro. Responde como soporte post-compra en 1 o 2 lineas, tono humano y sin signos de apertura. Ayuda con acceso, uso del material o dudas simples. No vendas, no ofrezcas descuentos y no repitas precios.";
 
@@ -146,8 +191,6 @@ Te dejo el acceso al material del *Kit Yoga Pro*:
 {{product_access_url}}
 Cualquier cosa, escribime por acá.`;
 
-const DEFAULT_OFFER_PROMO_TEXT = DEFAULT_FOLLOWUP_TEXT;
-
 export const DEFAULT_INFO_PAYMENT_TEXT = `si me das el ok, te comparto una vista del material para que no compres a ciegas y puedas ver la calidad 🪴
 
 antes ~$26.999~. solo por hoy $14.999✨`;
@@ -156,7 +199,7 @@ const DEFAULT_ASK_NAME_TEXT = "Cómo te llamás?";
 
 const DEFAULT_FLASH_OFFER_TEXT = `el dinero no tiene que ser un obstáculo para empezar 🌱
 
-Te ofrezco una *oferta relámpago*: el *Kit Yoga Pro* completo por solo *$4.999* (antes *$26.999*).
+Te ofrezco una *oferta relámpago*: el *Kit Yoga Pro* completo por solo *$6.999* (antes *$26.999*).
 
 Si te interesa, depositás al alias:
 
@@ -171,8 +214,10 @@ const DEFAULT_SETTINGS = {
   next_reply_prompt: DEFAULT_NEXT_REPLY_PROMPT,
   followup_text: DEFAULT_FOLLOWUP_TEXT,
   followup_reminder_text: DEFAULT_FOLLOWUP_REMINDER_TEXT,
+  reminder_detail_text: DEFAULT_REMINDER_DETAIL_TEXT,
+  reminder_product_description: DEFAULT_REMINDER_PRODUCT_DESCRIPTION,
+  reminder2_offer_text: DEFAULT_REMINDER2_OFFER_TEXT,
   paid_reply_prompt: DEFAULT_PAID_REPLY_PROMPT,
-  offer_promo_text: DEFAULT_OFFER_PROMO_TEXT,
   flash_offer_text: DEFAULT_FLASH_OFFER_TEXT,
   ask_name_text: DEFAULT_ASK_NAME_TEXT,
   openai_chat_model: "gpt-4o-mini",
@@ -514,13 +559,6 @@ migrateDefaultSetting("followup_text", DEFAULT_FOLLOWUP_TEXT, [
   "Te dejo una oportunidad para confirmar tu compra: el pack completo con los bonus por *$7999*. Depositás al alias *ofiprof.mp*, nos enviás el comprobante y te pasamos el link con todo el material.",
   "Te dejo una oportunidad para confirmar tu compra: solo por hoy el pack completo queda en *$4999* y antes estaba *$26999*. Depositás al alias *ofiprof.mp* a nombre de *Nicolás Stamm*, nos enviás el comprobante y te pasamos el link con todo el material.",
 ]);
-migrateDefaultSetting("offer_promo_text", DEFAULT_OFFER_PROMO_TEXT, [
-  `Te tengo una propuesta especial: el *Kit Yoga Pro completo* con todos los bonus por solo *$7999* en vez de $24.999.
-
-Es una oportunidad unica. Si te interesa, depositás al alias *ofiprof.mp*, nos mandás el comprobante y te paso el acceso con todo.`,
-  `Te tengo una propuesta especial: el *Kit Yoga Pro completo* con todos los bonus por solo *$7999* en vez de $24.999. Si te interesa, depositás al alias *ofiprof.mp*, nos mandás el comprobante y te paso el acceso con todo.`,
-  `Solo por hoy el *Kit Yoga Pro completo* queda en *$4999*. Antes estaba en *$26999*. Si te interesa, depositás al alias *ofiprof.mp* a nombre de *Nicolás Stamm*, nos mandás el comprobante y te paso el acceso con todo.`,
-]);
 migrateDefaultSetting("product_delivery_text", DEFAULT_PRODUCT_DELIVERY_TEXT, [
   `Pago confirmado ✅
 
@@ -533,13 +571,16 @@ migrateDefaultSetting("ask_name_text", DEFAULT_ASK_NAME_TEXT, [
   LEGACY_ASK_NAME_TEXT,
   "¡Hola! 👋 ¿Cómo te llamás?",
 ]);
+migrateDefaultSetting("reminder_detail_text", DEFAULT_REMINDER_DETAIL_TEXT, []);
+migrateDefaultSetting("reminder_product_description", DEFAULT_REMINDER_PRODUCT_DESCRIPTION, []);
+migrateDefaultSetting("reminder2_offer_text", DEFAULT_REMINDER2_OFFER_TEXT, []);
 
-for (const key of ["master_prompt", "followup_text", "offer_promo_text", "first_reply_prompt", "next_reply_prompt", "followup_reminder_text"]) {
+for (const key of ["master_prompt", "followup_text", "first_reply_prompt", "next_reply_prompt", "followup_reminder_text"]) {
   replaceSettingText(key, "ofiprof.mp", "kit.yogapro");
 }
 
 // Price migration: $4.999 → $14.999 in all relevant settings
-for (const key of ["master_prompt", "followup_text", "offer_promo_text", "next_reply_prompt", "followup_reminder_text"]) {
+for (const key of ["master_prompt", "followup_text", "next_reply_prompt", "followup_reminder_text"]) {
   replaceSettingText(key, "$4.999", "$14.999");
   replaceSettingText(key, "$4999", "$14999");
 }
@@ -547,6 +588,10 @@ replaceSettingText("master_prompt", "Solo por hoy $4.999", "Solo por hoy $14.999
 replaceSettingText("master_prompt", "siempre usá $4.999", "siempre usá $14.999");
 replaceSettingText("next_reply_prompt", "siempre decí $4.999", "siempre decí $14.999");
 replaceSettingText("followup_reminder_text", "oferta de $4.999", "oferta de $14.999");
+
+// Bombazo price migration: $4.999 → $6.999
+replaceSettingText("flash_offer_text", "$4.999", "$6.999");
+replaceSettingText("flash_offer_text", "$4999", "$6999");
 
 // INFO_PAYMENT_TEXT price migration
 replaceSettingText("master_prompt", "respondiendo por WhatsApp a leads", "respondiendo por chat a leads");
@@ -1963,15 +2008,30 @@ export function listDueReminders(date = new Date()) {
          AND handoff = 0
          AND promo_sent = 0
           AND reminder_sent_at IS NULL
-           AND (
-             (reminder_scheduled_at IS NOT NULL AND reminder_scheduled_at <= ?)
-             OR
-             (reminder2_scheduled_at IS NOT NULL AND reminder2_scheduled_at <= ?)
-           )
-       ORDER BY COALESCE(reminder_scheduled_at, reminder2_scheduled_at) ASC
+           AND reminder_scheduled_at IS NOT NULL
+           AND reminder_scheduled_at <= ?
+       ORDER BY reminder_scheduled_at ASC
        LIMIT 25`
     )
-    .all(now, now);
+    .all(now);
+}
+
+export function listDueReminder2s(date = new Date()) {
+  const now = date.toISOString();
+  return db
+    .prepare(
+      `SELECT *
+       FROM contacts
+       WHERE paid = 0
+         AND handoff = 0
+         AND promo_sent = 0
+          AND reminder2_sent_at IS NULL
+           AND reminder2_scheduled_at IS NOT NULL
+           AND reminder2_scheduled_at <= ?
+       ORDER BY reminder2_scheduled_at ASC
+       LIMIT 25`
+    )
+    .all(now);
 }
 
 export function markReminderSent(phoneNumber) {
@@ -1980,7 +2040,6 @@ export function markReminderSent(phoneNumber) {
     `UPDATE contacts
       SET reminder_sent_at = ?,
            reminder_scheduled_at = NULL,
-           reminder2_scheduled_at = NULL,
            updated_at = ?
        WHERE phone_number = ?`
   ).run(nowIso(), nowIso(), phoneNumber);
