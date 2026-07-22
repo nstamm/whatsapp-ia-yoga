@@ -590,9 +590,11 @@ replaceSettingText("master_prompt", "siempre usá $4.999", "siempre usá $14.999
 replaceSettingText("next_reply_prompt", "siempre decí $4.999", "siempre decí $14.999");
 replaceSettingText("followup_reminder_text", "oferta de $4.999", "oferta de $14.999");
 
-// Bombazo price migration: $4.999 → $6.999
+// Bombazo price migration: catch ALL variants of 4999 → 6999
 replaceSettingText("flash_offer_text", "$4.999", "$6.999");
 replaceSettingText("flash_offer_text", "$4999", "$6999");
+replaceSettingText("flash_offer_text", "4.999", "6.999");
+replaceSettingText("flash_offer_text", "4999", "6999");
 
 // INFO_PAYMENT_TEXT price migration
 replaceSettingText("master_prompt", "respondiendo por WhatsApp a leads", "respondiendo por chat a leads");
