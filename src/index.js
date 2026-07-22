@@ -75,6 +75,7 @@ import {
   hasMaterialPreviewBeenOffered,
   markMaterialVideoSent,
   hasMaterialVideoBeenSent,
+  getMaterialVideoSentAt,
   getAdSpend,
   getMetaAdsDailyMetrics,
   deleteMetaAdsDailyMetrics,
@@ -143,7 +144,7 @@ const adsDashboardCache = createAsyncTtlCache({
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const MESSAGE_DEBOUNCE_MS = 2500;
+const MESSAGE_DEBOUNCE_MS = 20000;
 const pendingMessages = new Map();
 
 function getDebounceKey(identity) {
@@ -751,6 +752,12 @@ function looksLikeGreetingOnly(text) {
   return /^(hola+|buenas|buenos dias|buen día|buen dia|buenas tardes|buenas noches|hey|holi|hello|hi)[!.\s]*$/i.test(
     String(text ?? "").trim()
   );
+}
+
+const EMOJI_ONLY_RE = /^(?:\s*(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Emoji_Modifier_Base}\p{Emoji_Modifier}?|\p{Emoji_Component}|\s\u200d)+\s*)+$/u;
+
+function isEmojiOnly(text) {
+  return EMOJI_ONLY_RE.test(String(text ?? "").trim());
 }
 
 function looksLikePriceInquiry(text) {
@@ -4670,6 +4677,11 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       return;
     }
 
+    if (isEmojiOnly(userMessage)) {
+      console.log(`🏷️ [${phoneNumber}] Emoji-only message, ignoring.`);
+      return;
+    }
+
     const hasPaymentContext = hasCommercialPaymentContext(contact, history, phoneNumber);
     const isContextualPaymentAttachment = hasPaymentAttachment(message) && hasPaymentContext;
 
@@ -4722,6 +4734,17 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       return;
     }
 
+    const MATERIAL_VIDEO_COOLDOWN_MS = 20000;
+    const videoSentAt = getMaterialVideoSentAt(phoneNumber);
+    if (videoSentAt) {
+      const elapsed = Date.now() - new Date(videoSentAt).getTime();
+      if (elapsed < MATERIAL_VIDEO_COOLDOWN_MS) {
+        const waitMs = MATERIAL_VIDEO_COOLDOWN_MS - elapsed;
+        console.log(`⏳ [${phoneNumber}] Cooldown post-video: waiting ${waitMs}ms`);
+        await sleep(waitMs);
+      }
+    }
+
     const effectiveUserMessage = messageForAI;
     const shouldSendMaterialVideo =
       !contact.paid &&
@@ -4744,14 +4767,13 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       if (videoSent) {
         addMessage(phoneNumber, "assistant", "[video muestra del material]", { conversationId });
         await sleep(900);
-        addMessage(phoneNumber, "assistant", MATERIAL_VIDEO_INTRO_TEXT, { conversationId });
-        await reply(MATERIAL_VIDEO_INTRO_TEXT);
-        await sleep(900);
-        addMessage(phoneNumber, "assistant", MATERIAL_PAYMENT_ALIAS_TEXT, { conversationId });
-        await reply(MATERIAL_PAYMENT_ALIAS_TEXT);
-        await sleep(900);
-        addMessage(phoneNumber, "assistant", MATERIAL_PAYMENT_NOTE_TEXT, { conversationId });
-        await reply(MATERIAL_PAYMENT_NOTE_TEXT);
+        const materialFlowText = [
+          MATERIAL_VIDEO_INTRO_TEXT,
+          MATERIAL_PAYMENT_ALIAS_TEXT,
+          MATERIAL_PAYMENT_NOTE_TEXT
+        ].join("\n\n");
+        addMessage(phoneNumber, "assistant", materialFlowText, { conversationId });
+        await reply(materialFlowText);
       }
       return;
     }
@@ -4802,13 +4824,12 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
     }
     addMessage(phoneNumber, "assistant", aiReply, { conversationId });
 
-    await reply(aiReply);
+    const finalReply = shouldSendInfoPaymentText ? `${aiReply}\n\n${DEFAULT_INFO_PAYMENT_TEXT}` : aiReply;
+    await reply(finalReply);
 
     if (shouldSendInfoPaymentText) {
-      await sleep(700);
       addMessage(phoneNumber, "assistant", DEFAULT_INFO_PAYMENT_TEXT, { conversationId });
       markMaterialPreviewOffered(phoneNumber);
-      await reply(DEFAULT_INFO_PAYMENT_TEXT);
     }
 
     console.log(`🤖 [${phoneNumber}] ${aiReply.slice(0, 80)}...`);

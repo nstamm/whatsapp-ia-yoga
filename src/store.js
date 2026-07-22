@@ -397,6 +397,7 @@ const contactMigrations = [
   ["reminder2_sent_at", "ALTER TABLE contacts ADD COLUMN reminder2_sent_at TEXT"],
   ["material_preview_offered", "ALTER TABLE contacts ADD COLUMN material_preview_offered INTEGER NOT NULL DEFAULT 0"],
   ["material_video_sent", "ALTER TABLE contacts ADD COLUMN material_video_sent INTEGER NOT NULL DEFAULT 0"],
+  ["material_video_sent_at", "ALTER TABLE contacts ADD COLUMN material_video_sent_at TEXT"],
   ["last_incoming_at", "ALTER TABLE contacts ADD COLUMN last_incoming_at TEXT"],
   ["name", "ALTER TABLE contacts ADD COLUMN name TEXT DEFAULT ''"],
   ["name_asked", "ALTER TABLE contacts ADD COLUMN name_asked INTEGER NOT NULL DEFAULT 0"],
@@ -1115,14 +1116,20 @@ export function hasMaterialPreviewBeenOffered(phoneNumber) {
 
 export function markMaterialVideoSent(phoneNumber) {
   ensureContact(phoneNumber);
-  db.prepare("UPDATE contacts SET material_video_sent = 1, updated_at = ? WHERE phone_number = ?").run(
-    nowIso(),
+  const now = nowIso();
+  db.prepare("UPDATE contacts SET material_video_sent = 1, material_video_sent_at = COALESCE(material_video_sent_at, ?), updated_at = ? WHERE phone_number = ?").run(
+    now,
+    now,
     phoneNumber
   );
 }
 
 export function hasMaterialVideoBeenSent(phoneNumber) {
   return Boolean(getContact(phoneNumber).material_video_sent);
+}
+
+export function getMaterialVideoSentAt(phoneNumber) {
+  return getContact(phoneNumber).material_video_sent_at || "";
 }
 
 export function saveContactName(phoneNumber, name) {
