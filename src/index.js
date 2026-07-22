@@ -4767,13 +4767,14 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       if (videoSent) {
         addMessage(phoneNumber, "assistant", "[video muestra del material]", { conversationId });
         await sleep(900);
-        const materialFlowText = [
-          MATERIAL_VIDEO_INTRO_TEXT,
-          MATERIAL_PAYMENT_ALIAS_TEXT,
-          MATERIAL_PAYMENT_NOTE_TEXT
-        ].join("\n\n");
-        addMessage(phoneNumber, "assistant", materialFlowText, { conversationId });
-        await reply(materialFlowText);
+        addMessage(phoneNumber, "assistant", MATERIAL_VIDEO_INTRO_TEXT, { conversationId });
+        await reply(MATERIAL_VIDEO_INTRO_TEXT);
+        await sleep(900);
+        addMessage(phoneNumber, "assistant", MATERIAL_PAYMENT_ALIAS_TEXT, { conversationId });
+        await reply(MATERIAL_PAYMENT_ALIAS_TEXT);
+        await sleep(900);
+        addMessage(phoneNumber, "assistant", MATERIAL_PAYMENT_NOTE_TEXT, { conversationId });
+        await reply(MATERIAL_PAYMENT_NOTE_TEXT);
       }
       return;
     }
