@@ -4,6 +4,8 @@ services:
     container_name: whatsapp-ia-yoga
     restart: unless-stopped
     init: true
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: "3000"
