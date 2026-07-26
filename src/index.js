@@ -15,6 +15,7 @@ import { buildConversationFlow, validateFlowSettings } from "./conversationFlow.
 import { adminSectionDataNeeds, buildAdminConversationQuery, createAsyncTtlCache, isFreshTimestamp, isValidDateKey, mapWithConcurrency } from "./adminPerformance.js";
 import { DEFAULT_META_AD_ACCOUNT_NAME, hasMetaAdsActivity, metaSpendInArs, primaryMetaAdAccountId, selectPrimaryMetaAdAccount, shouldReplaceLegacyMetaAdsMetrics } from "./metaAdsPolicy.js";
 import { observeMetric, performanceSnapshot } from "./performanceMetrics.js";
+import { isPermanentReminderSendError, reminderTextChunks } from "./reminderPolicy.js";
 import {
   ensureWhatsAppDataset,
   getAdsTimeline,
@@ -60,6 +61,8 @@ import {
   scheduleReminder,
   listDueReminders,
   listDueReminder2s,
+  claimDueReminder,
+  claimDueReminder2,
   markReminderSent,
   markReminder2Sent,
   markProductReleased,
@@ -867,6 +870,9 @@ async function processDueReminders() {
   const due = listDueReminders();
 
   for (const contact of due) {
+    // Automated reminders fail closed so a partial provider failure cannot resend earlier messages.
+    if (!claimDueReminder(contact.phone_number)) continue;
+
     const freshContact = getContact(contact.phone_number);
     if (freshContact.paid || freshContact.handoff || freshContact.promo_sent) {
       continue;
@@ -887,27 +893,13 @@ async function processDueReminders() {
 
       const detailText = getSetting("reminder_detail_text", "").trim();
       if (detailText) {
-        try {
-          await sendTypingIndicator(contact.conversation_id, options);
-        } catch (typingErr) {
-          console.warn(`⚠️ Typing indicator failed before 6h detail for ${contact.phone_number}:`, typingErr.message);
-        }
-        await sleep(humanDelayFor(detailText));
-        await sendWhatsAppMessage(contact.conversation_id, detailText, options);
-        addMessage(contact.phone_number, "assistant", detailText, { conversationId: contact.conversation_id });
+        await sendReminderText(contact, detailText, options, "6h detail");
       }
 
       const productDesc = getSetting("reminder_product_description", "").trim();
       if (productDesc) {
         await sleep(900);
-        try {
-          await sendTypingIndicator(contact.conversation_id, options);
-        } catch (typingErr) {
-          console.warn(`⚠️ Typing indicator failed before 6h product desc for ${contact.phone_number}:`, typingErr.message);
-        }
-        await sleep(humanDelayFor(productDesc));
-        await sendWhatsAppMessage(contact.conversation_id, productDesc, options);
-        addMessage(contact.phone_number, "assistant", productDesc, { conversationId: contact.conversation_id });
+        await sendReminderText(contact, productDesc, options, "6h product description");
       }
 
       if (!audioSent && !detailText && !productDesc) {
@@ -933,7 +925,27 @@ async function processDueReminders() {
         continue;
       }
 
-      console.error(`❌ Error sending 6h reminder to ${contact.phone_number}:`, err.message);
+      console.error(`❌ Error sending 6h reminder to ${contact.phone_number}; automatic retry disabled:`, err.message);
+    }
+  }
+}
+
+async function sendReminderText(contact, text, options, label) {
+  const chunks = reminderTextChunks(text, contact.channel);
+
+  for (const [index, chunk] of chunks.entries()) {
+    try {
+      await sendTypingIndicator(contact.conversation_id, options);
+    } catch (typingErr) {
+      console.warn(`⚠️ Typing indicator failed before ${label} for ${contact.phone_number}:`, typingErr.message);
+    }
+
+    await sleep(humanDelayFor(chunk));
+    await sendWhatsAppMessage(contact.conversation_id, chunk, options);
+    addMessage(contact.phone_number, "assistant", chunk, { conversationId: contact.conversation_id });
+
+    if (chunks.length > 1) {
+      console.log(`📄 ${label} part ${index + 1}/${chunks.length} sent to ${contact.phone_number}`);
     }
   }
 }
@@ -942,6 +954,9 @@ async function processDueReminder2s() {
   const due = listDueReminder2s();
 
   for (const contact of due) {
+    // Use the same at-most-once policy for the second automated offer.
+    if (!claimDueReminder2(contact.phone_number)) continue;
+
     const freshContact = getContact(contact.phone_number);
     if (freshContact.paid || freshContact.handoff || freshContact.promo_sent) {
       continue;
@@ -957,16 +972,7 @@ async function processDueReminder2s() {
       if (!text) continue;
 
       const options = zernioOptionsFor(contact);
-
-      try {
-        await sendTypingIndicator(contact.conversation_id, options);
-      } catch (typingErr) {
-        console.warn(`⚠️ Typing indicator failed before 23h offer for ${contact.phone_number}:`, typingErr.message);
-      }
-
-      await sleep(humanDelayFor(text));
-      await sendWhatsAppMessage(contact.conversation_id, text, options);
-      addMessage(contact.phone_number, "assistant", text, { conversationId: contact.conversation_id });
+      await sendReminderText(contact, text, options, "23h offer");
       markReminder2Sent(contact.phone_number);
       console.log(`📣 23h offer sent to ${contact.phone_number}`);
     } catch (err) {
@@ -976,22 +982,9 @@ async function processDueReminder2s() {
         continue;
       }
 
-      console.error(`❌ Error sending 23h reminder to ${contact.phone_number}:`, err.message);
+      console.error(`❌ Error sending 23h reminder to ${contact.phone_number}; automatic retry disabled:`, err.message);
     }
   }
-}
-
-function isPermanentReminderSendError(err) {
-  const message = String(err?.message ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  return (
-    message.includes("outside of allowed window") ||
-    message.includes("fuera del periodo permitido") ||
-    message.includes("fuera de la ventana")
-  );
 }
 
 function buildProductDeliveryText() {

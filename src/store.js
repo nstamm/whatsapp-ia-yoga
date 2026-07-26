@@ -259,8 +259,10 @@ db.exec(`
     promo_sent INTEGER NOT NULL DEFAULT 0,
     promo_sent_at TEXT,
     reminder_scheduled_at TEXT,
+    reminder_attempted_at TEXT,
     reminder_sent_at TEXT,
     reminder2_scheduled_at TEXT,
+    reminder2_attempted_at TEXT,
     reminder2_sent_at TEXT,
     material_preview_offered INTEGER NOT NULL DEFAULT 0,
     material_video_sent INTEGER NOT NULL DEFAULT 0,
@@ -392,8 +394,10 @@ const contactMigrations = [
   ["promo_sent", "ALTER TABLE contacts ADD COLUMN promo_sent INTEGER NOT NULL DEFAULT 0"],
   ["promo_sent_at", "ALTER TABLE contacts ADD COLUMN promo_sent_at TEXT"],
   ["reminder_scheduled_at", "ALTER TABLE contacts ADD COLUMN reminder_scheduled_at TEXT"],
+  ["reminder_attempted_at", "ALTER TABLE contacts ADD COLUMN reminder_attempted_at TEXT"],
   ["reminder_sent_at", "ALTER TABLE contacts ADD COLUMN reminder_sent_at TEXT"],
   ["reminder2_scheduled_at", "ALTER TABLE contacts ADD COLUMN reminder2_scheduled_at TEXT"],
+  ["reminder2_attempted_at", "ALTER TABLE contacts ADD COLUMN reminder2_attempted_at TEXT"],
   ["reminder2_sent_at", "ALTER TABLE contacts ADD COLUMN reminder2_sent_at TEXT"],
   ["material_preview_offered", "ALTER TABLE contacts ADD COLUMN material_preview_offered INTEGER NOT NULL DEFAULT 0"],
   ["material_video_sent", "ALTER TABLE contacts ADD COLUMN material_video_sent INTEGER NOT NULL DEFAULT 0"],
@@ -472,6 +476,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_contacts_attribution_date ON contacts(attribution_at, contact_key) WHERE ctwa_source_id != '';
   CREATE INDEX IF NOT EXISTS idx_contacts_reminder_due ON contacts(reminder_scheduled_at) WHERE reminder_sent_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_contacts_reminder2_due ON contacts(reminder2_scheduled_at) WHERE reminder2_sent_at IS NULL;
+  CREATE INDEX IF NOT EXISTS idx_contacts_reminder_claimable ON contacts(reminder_scheduled_at) WHERE reminder_sent_at IS NULL AND reminder_attempted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS idx_contacts_reminder2_claimable ON contacts(reminder2_scheduled_at) WHERE reminder2_sent_at IS NULL AND reminder2_attempted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_messages_phone_id ON messages(phone_number, id);
   CREATE INDEX IF NOT EXISTS idx_messages_phone_role ON messages(phone_number, role);
   CREATE INDEX IF NOT EXISTS idx_messages_at ON messages(at);
@@ -1074,7 +1080,11 @@ export function clearHistory(phoneNumber) {
           name_asked = 0,
           promo_scheduled_at = NULL,
           reminder_scheduled_at = NULL,
+          reminder_attempted_at = NULL,
           reminder_sent_at = NULL,
+          reminder2_scheduled_at = NULL,
+          reminder2_attempted_at = NULL,
+          reminder2_sent_at = NULL,
           updated_at = ?
      WHERE phone_number = ?`
   ).run(nowIso(), phoneNumber);
@@ -2017,6 +2027,7 @@ export function listDueReminders(date = new Date()) {
          AND handoff = 0
          AND promo_sent = 0
           AND reminder_sent_at IS NULL
+           AND reminder_attempted_at IS NULL
            AND reminder_scheduled_at IS NOT NULL
            AND reminder_scheduled_at <= ?
        ORDER BY reminder_scheduled_at ASC
@@ -2035,12 +2046,53 @@ export function listDueReminder2s(date = new Date()) {
          AND handoff = 0
          AND promo_sent = 0
           AND reminder2_sent_at IS NULL
+           AND reminder2_attempted_at IS NULL
            AND reminder2_scheduled_at IS NOT NULL
            AND reminder2_scheduled_at <= ?
        ORDER BY reminder2_scheduled_at ASC
        LIMIT 25`
     )
     .all(now);
+}
+
+export function claimDueReminder(phoneNumber, date = new Date()) {
+  const now = date.toISOString();
+  const result = db.prepare(
+    `UPDATE contacts
+     SET reminder_attempted_at = ?,
+         reminder_scheduled_at = NULL,
+         updated_at = ?
+     WHERE phone_number = ?
+       AND paid = 0
+       AND handoff = 0
+       AND promo_sent = 0
+       AND reminder_sent_at IS NULL
+       AND reminder_attempted_at IS NULL
+       AND reminder_scheduled_at IS NOT NULL
+       AND reminder_scheduled_at <= ?`
+  ).run(now, now, phoneNumber, now);
+
+  return result.changes === 1;
+}
+
+export function claimDueReminder2(phoneNumber, date = new Date()) {
+  const now = date.toISOString();
+  const result = db.prepare(
+    `UPDATE contacts
+     SET reminder2_attempted_at = ?,
+         reminder2_scheduled_at = NULL,
+         updated_at = ?
+     WHERE phone_number = ?
+       AND paid = 0
+       AND handoff = 0
+       AND promo_sent = 0
+       AND reminder2_sent_at IS NULL
+       AND reminder2_attempted_at IS NULL
+       AND reminder2_scheduled_at IS NOT NULL
+       AND reminder2_scheduled_at <= ?`
+  ).run(now, now, phoneNumber, now);
+
+  return result.changes === 1;
 }
 
 export function markReminderSent(phoneNumber) {

@@ -1,109 +1,78 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import {
+  INSTAGRAM_MESSAGE_LIMIT,
+  isPermanentReminderSendError,
+  reminderTextChunks,
+} from "../src/reminderPolicy.js";
 
-function isDueReminder(contact, nowIso) {
-  if (contact.paid || contact.handoff || contact.promo_sent) return false;
-  if (contact.reminder_sent_at) return false;
+const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-reminders-"));
+process.env.CRM_DATA_DIR = dataDir;
+const store = await import("../src/store.js");
+const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
 
-  return (
-    contact.reminder_scheduled_at && contact.reminder_scheduled_at <= nowIso
+function makeReminderDue(phoneNumber, column = "reminder_scheduled_at") {
+  store.ensureContact(phoneNumber, { conversationId: `conversation-${phoneNumber}` });
+  db.prepare(`UPDATE contacts SET ${column} = ? WHERE phone_number = ?`).run(
+    "2026-07-11T10:00:00.000Z",
+    phoneNumber
   );
 }
 
-function isDueReminder2(contact, nowIso) {
-  if (contact.paid || contact.handoff || contact.promo_sent) return false;
-  if (contact.reminder2_sent_at) return false;
+test("a due 6h reminder can be claimed only once", () => {
+  const phoneNumber = "+541111111111";
+  const now = new Date("2026-07-11T12:00:00.000Z");
+  makeReminderDue(phoneNumber);
 
-  return (
-    contact.reminder2_scheduled_at && contact.reminder2_scheduled_at <= nowIso
-  );
-}
+  assert.equal(store.listDueReminders(now).length, 1);
+  assert.equal(store.claimDueReminder(phoneNumber, now), true);
+  assert.equal(store.claimDueReminder(phoneNumber, now), false);
+  assert.equal(store.listDueReminders(now).length, 0);
 
-function markReminderSentRow(contact, sentAt) {
-  return {
-    ...contact,
-    reminder_sent_at: sentAt,
-    reminder_scheduled_at: null,
-  };
-}
-
-function markReminder2SentRow(contact, sentAt) {
-  return {
-    ...contact,
-    reminder2_sent_at: sentAt,
-    reminder2_scheduled_at: null,
-  };
-}
-
-function isPermanentReminderSendError(err) {
-  const message = String(err?.message ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  return (
-    message.includes("outside of allowed window") ||
-    message.includes("fuera del periodo permitido") ||
-    message.includes("fuera de la ventana")
-  );
-}
-
-test("sent reminder with stale second reminder is not due again", () => {
-  const now = "2026-07-11T12:00:00.000Z";
-  const contact = {
-    paid: 0,
-    handoff: 0,
-    promo_sent: 0,
-    reminder_sent_at: "2026-07-11T11:00:00.000Z",
-    reminder_scheduled_at: null,
-    reminder2_scheduled_at: "2026-07-11T10:00:00.000Z",
-  };
-
-  assert.equal(isDueReminder(contact, now), false);
-  assert.equal(isDueReminder2(contact, now), true);
+  const contact = store.getContact(phoneNumber);
+  assert.equal(contact.reminder_scheduled_at, null);
+  assert.equal(contact.reminder_attempted_at, now.toISOString());
+  assert.equal(contact.reminder_sent_at, null);
 });
 
-test("marking reminder sent clears only reminder_scheduled_at", () => {
-  const sentAt = "2026-07-11T12:00:00.000Z";
-  const contact = {
-    reminder_scheduled_at: "2026-07-11T10:00:00.000Z",
-    reminder2_scheduled_at: "2026-07-11T11:00:00.000Z",
-  };
+test("a failed claimed reminder is not automatically due again", () => {
+  const phoneNumber = "+542222222222";
+  const now = new Date("2026-07-11T12:00:00.000Z");
+  makeReminderDue(phoneNumber);
 
-  assert.deepEqual(markReminderSentRow(contact, sentAt), {
-    reminder_sent_at: sentAt,
-    reminder_scheduled_at: null,
-    reminder2_scheduled_at: "2026-07-11T11:00:00.000Z",
-  });
+  assert.equal(store.claimDueReminder(phoneNumber, now), true);
+  assert.equal(store.listDueReminders(new Date("2026-07-12T12:00:00.000Z")).length, 0);
 });
 
-test("marking reminder2 sent clears only reminder2_scheduled_at", () => {
-  const sentAt = "2026-07-11T12:00:00.000Z";
-  const contact = {
-    reminder_scheduled_at: "2026-07-11T10:00:00.000Z",
-    reminder2_scheduled_at: "2026-07-11T11:00:00.000Z",
-  };
+test("claiming the 6h reminder does not consume the 23h reminder", () => {
+  const phoneNumber = "+543333333333";
+  const now = new Date("2026-07-11T12:00:00.000Z");
+  makeReminderDue(phoneNumber);
+  makeReminderDue(phoneNumber, "reminder2_scheduled_at");
 
-  assert.deepEqual(markReminder2SentRow(contact, sentAt), {
-    reminder2_sent_at: sentAt,
-    reminder_scheduled_at: "2026-07-11T10:00:00.000Z",
-    reminder2_scheduled_at: null,
-  });
+  assert.equal(store.claimDueReminder(phoneNumber, now), true);
+  assert.equal(store.listDueReminder2s(now).length, 1);
+  assert.equal(store.claimDueReminder2(phoneNumber, now), true);
+  assert.equal(store.claimDueReminder2(phoneNumber, now), false);
 });
 
-test("second scheduled reminder is due only before it has been marked sent", () => {
-  const now = "2026-07-11T12:00:00.000Z";
-  const contact = {
-    paid: 0,
-    handoff: 0,
-    promo_sent: 0,
-    reminder_sent_at: null,
-    reminder_scheduled_at: null,
-    reminder2_scheduled_at: "2026-07-11T11:00:00.000Z",
-  };
+test("Instagram reminder text is split below the provider limit", () => {
+  const text = `${"a".repeat(700)}\n\n${"b".repeat(700)}`;
+  const chunks = reminderTextChunks(text, "instagram");
 
-  assert.equal(isDueReminder2(contact, now), true);
-  assert.equal(isDueReminder2(markReminder2SentRow(contact, now), now), false);
+  assert.equal(chunks.length, 2);
+  assert.ok(chunks.every((chunk) => Array.from(chunk).length <= INSTAGRAM_MESSAGE_LIMIT));
+  assert.equal(chunks[0], "a".repeat(700));
+  assert.equal(chunks[1], "b".repeat(700));
+});
+
+test("short reminder text remains a single message", () => {
+  const text = "holaa, te mando por acá el detalle porque antes te mandé solo el video 🪴";
+  assert.deepEqual(reminderTextChunks(text, "instagram"), [text]);
 });
 
 test("outside allowed window is treated as permanent reminder send failure", () => {
