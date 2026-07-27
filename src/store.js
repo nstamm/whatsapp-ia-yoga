@@ -87,7 +87,7 @@ const LEGACY_HUMANIZED_FIRST_REPLY_PROMPT =
 const LEGACY_HUMANIZED_NEXT_REPLY_PROMPT =
   "Ya hay conversacion previa. Responde como persona real en 1 o 2 lineas, con pocos saltos de linea. No repitas toda la presentacion salvo que la persona la pida. No uses signos de apertura. No menciones precios ni alias salvo que pregunten precio o como comprar.";
 
-const DEFAULT_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
+const PROFESSIONAL_ONLY_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
 
 Producto principal: Kit Yoga Pro. Es un recurso para profesores, profesoras e instructores de yoga que quieren organizar mejor sus clases, dejar de improvisar y tener plantillas listas para usar. Incluye clases armadas, secuencias, videos y audios de apoyo para preparar encuentros más claros, ordenados y profesionales.
 
@@ -114,11 +114,45 @@ Estilo:
 - Evitá bloques largos, listas largas y tono de folleto.
 - Una sola pregunta al final solo cuando ayude a avanzar.`;
 
-const DEFAULT_FIRST_REPLY_PROMPT =
+const DEFAULT_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
+
+Producto principal: Kit Yoga Pro. Es un recurso completo tanto para personas que quieren mejorar y sostener su práctica de yoga en casa como para profesores, profesoras e instructores que buscan planificar clases, organizar alumnos y enseñar con más seguridad. Incluye material progresivo, secuencias, posturas, videos, audios y herramientas prácticas.
+
+Oferta vigente:
+- Antes ~$26.999~.
+- Solo por hoy $14.999.
+- El sistema ya envía la oferta completa al inicio y luego pregunta si la persona quiere ver un video del material.
+- El alias de pago lo manda el sistema después del video.
+
+Flujo comercial:
+- Respondé dudas según el contexto sin repetir la oferta completa que el sistema ya envió.
+- Si la persona practica en casa, enfocá la respuesta en progresión, claridad, constancia y acompañamiento.
+- Si da clases, enfocá la respuesta en planificación, secuencias listas, organización y seguridad para enseñar.
+- No inventes precios, descuentos, cuotas, garantías, fechas, stock, plataformas ni medios de pago.
+- Si mencionás precio, siempre usá $14.999 y precio anterior $26.999.
+- No escribas el alias kit.yogapro ni el nombre Nicolás Stamm; el sistema los envía después del video.
+- Si la persona dice que pagó o manda comprobante, no sigas vendiendo.
+
+Estilo:
+- Español rioplatense con voseo.
+- Soná como una persona real, cercana y tranquila.
+- No digas que sos IA, bot, automatización ni asistente virtual.
+- No uses signos de apertura como ¿ o ¡.
+- Respuestas cortas: 1 a 3 líneas.
+- Evitá bloques largos, listas largas y tono de folleto.
+- Una sola pregunta al final solo cuando ayude a avanzar.`;
+
+const PROFESSIONAL_ONLY_FIRST_REPLY_PROMPT =
   "Primer mensaje util: 1 o 2 lineas, tono humano de chat. Si preguntan por el Kit Yoga Pro, contá natural que está pensado para profes de yoga que quieren organizar clases, usar plantillas listas y dejar de improvisar. No uses signos de apertura. No menciones alias. Cerrá con una pregunta corta solo si ayuda.";
 
-const DEFAULT_NEXT_REPLY_PROMPT =
+const DEFAULT_FIRST_REPLY_PROMPT =
+  "Primer mensaje útil de IA después de la oferta inicial: respondé en 1 o 2 líneas según la duda. Adaptá el beneficio a práctica en casa o uso profesional, sin repetir toda la oferta, el alias ni el nombre de la cuenta.";
+
+const PROFESSIONAL_ONLY_NEXT_REPLY_PROMPT =
   "Ya hay conversacion previa. Respondé como persona real en 1 o 2 lineas, con foco en organizacion de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar. No repitas toda la presentacion salvo que la persona lo pida. No uses signos de apertura. Si mencionás precio, siempre decí $14.999 y antes $26.999. No escribas el alias ni el nombre de la cuenta; el sistema lo manda separado despues del video.";
+
+const DEFAULT_NEXT_REPLY_PROMPT =
+  "Ya hay conversación previa. Respondé como persona real en 1 o 2 líneas y adaptá el mensaje al objetivo de la persona: mejorar su práctica en casa o usar el material para enseñar. No repitas toda la oferta salvo que la pida. Si mencionás precio, usá $14.999 y antes $26.999. No escribas el alias ni el nombre de la cuenta; el sistema los manda después del video.";
 
 const DEFAULT_FOLLOWUP_TEXT =
   `te libero el acceso ahora para que puedas verlo tranquilo.
@@ -131,36 +165,30 @@ A nombre de Nicolás Stamm
 Acá tenés el material:
 {{product_access_url}}`;
 
-const DEFAULT_FOLLOWUP_REMINDER_TEXT = `holaa, pudiste ver el material? sigue activa la oferta de $14.999 por hoy 🪴
+const DEFAULT_INITIAL_OFFER_TEXT = `Te cuento bien qué incluye la oferta:
 
-cualquier cosa estoy por acá`;
-
-const DEFAULT_REMINDER_DETAIL_TEXT = "holaa, te mando por acá el detalle porque antes te mandé solo el video 🪴";
-
-const DEFAULT_REMINDER_PRODUCT_DESCRIPTION = `Te cuento bien qué incluye la oferta:
-
-El Kit Profe de Yoga-Pro es un sistema completo para que puedas planificar tus clases, organizar a tus alumnos y trabajar con más seguridad, sin perder horas buscando ideas o improvisando.
+El Kit Yoga Pro es un sistema completo tanto para mejorar y sostener tu práctica de yoga en casa como para planificar clases, organizar alumnos y enseñar con más seguridad.
 
 Incluye:
 
 ✅ 6 tomos en PDF
 ✅ 36 módulos, desde nivel básico hasta avanzado
 ✅ Más de 250 páginas
-✅ Secuencias, posturas, alineación y planificación de clases
+✅ Secuencias, posturas y alineación
 ✅ Yoga terapéutico y adaptativo
 ✅ Pranayama, meditación y filosofía
 ✅ 6 videos explicativos
 ✅ 6 cuestionarios para fijar los contenidos
 
-Además, te llevás los 3 Bonos de Productividad:
+Además, te llevás 3 bonos de productividad:
 
 📁 Carpeta del Profesor: fichas médicas, asistencia, pagos, recibos y planificación anual.
 
-📣 De Profe a Centro de Yoga: flyers, guiones de WhatsApp, clases abiertas y sistema de referidos para conseguir alumnos.
+📣 De Profe a Centro de Yoga: flyers, guiones de WhatsApp, clases abiertas y sistema de referidos.
 
 🧘‍♀️ Creación de Talleres Especiales: 8 talleres listos para ofrecer, con cronograma, precios orientativos y guiones de venta.
 
-También incluyen sus versiones en audio para que puedas escucharlos cuando quieras.
+También incluye versiones en audio para que puedas estudiar o repasar cuando quieras.
 
 En total recibís:
 
@@ -168,11 +196,9 @@ En total recibís:
 
 El acceso es inmediato, el material es descargable y podés usarlo desde el celular, tablet o computadora.
 
-El valor habitual del paquete completo es de $49.999, pero hoy podés llevarte el Kit completo más los 3 bonos por un único pago de $14.999.
+Antes ~$26.999~. Hoy podés llevarte el kit completo más los 3 bonos por un único pago de $14.999 🪴
 
-Tenés además 7 días de garantía.
-
-La idea es que tengas todo tu año de yoga resuelto: menos tiempo planificando y más energía para tus clases 🪴`;
+Si querés, te comparto un video para que veas por dentro cómo es el material y puedas decidir tranquilo. Te lo mando?`;
 
 const DEFAULT_REMINDER2_OFFER_TEXT = `¡Hola! Queremos que el dinero no sea un obstáculo y que este material llegue a todas las personas que lo necesiten.
 
@@ -190,10 +216,6 @@ const DEFAULT_PRODUCT_DELIVERY_TEXT = `Pago confirmado ✅
 Te dejo el acceso al material del *Kit Yoga Pro*:
 {{product_access_url}}
 Cualquier cosa, escribime por acá.`;
-
-export const DEFAULT_INFO_PAYMENT_TEXT = `si me das el ok, te comparto una vista del material para que no compres a ciegas y puedas ver la calidad 🪴
-
-antes ~$26.999~. solo por hoy $14.999✨`;
 
 const DEFAULT_ASK_NAME_TEXT = "Cómo te llamás?";
 
@@ -213,9 +235,7 @@ const DEFAULT_SETTINGS = {
   first_reply_prompt: DEFAULT_FIRST_REPLY_PROMPT,
   next_reply_prompt: DEFAULT_NEXT_REPLY_PROMPT,
   followup_text: DEFAULT_FOLLOWUP_TEXT,
-  followup_reminder_text: DEFAULT_FOLLOWUP_REMINDER_TEXT,
-  reminder_detail_text: DEFAULT_REMINDER_DETAIL_TEXT,
-  reminder_product_description: DEFAULT_REMINDER_PRODUCT_DESCRIPTION,
+  initial_offer_text: DEFAULT_INITIAL_OFFER_TEXT,
   reminder2_offer_text: DEFAULT_REMINDER2_OFFER_TEXT,
   paid_reply_prompt: DEFAULT_PAID_REPLY_PROMPT,
   flash_offer_text: DEFAULT_FLASH_OFFER_TEXT,
@@ -509,7 +529,11 @@ function replaceSettingText(key, fromText, toText) {
   db.prepare("UPDATE settings SET value = replace(value, ?, ?) WHERE key = ?").run(fromText, toText, key);
 }
 
-migrateDefaultSetting("master_prompt", DEFAULT_MASTER_PROMPT, [LEGACY_MASTER_PROMPT, LEGACY_HUMANIZED_MASTER_PROMPT]);
+migrateDefaultSetting("master_prompt", DEFAULT_MASTER_PROMPT, [
+  LEGACY_MASTER_PROMPT,
+  LEGACY_HUMANIZED_MASTER_PROMPT,
+  PROFESSIONAL_ONLY_MASTER_PROMPT,
+]);
 migrateDefaultSetting("master_prompt", DEFAULT_MASTER_PROMPT, [
   `Sos una persona del equipo comercial de Ofiprof respondiendo por WhatsApp a leads que llegan desde anuncios de Meta.
 
@@ -547,12 +571,14 @@ No inventes descuentos, garantias, cuotas, stock, fechas, plataformas ni medios 
 migrateDefaultSetting("first_reply_prompt", DEFAULT_FIRST_REPLY_PROMPT, [
   LEGACY_FIRST_REPLY_PROMPT,
   LEGACY_HUMANIZED_FIRST_REPLY_PROMPT,
+  PROFESSIONAL_ONLY_FIRST_REPLY_PROMPT,
   "Primer mensaje util: 1 o 2 lineas, tono humano de WhatsApp. Si preguntan por el Kit Yoga Pro, contá natural que está pensado para profes de yoga que quieren organizar clases, usar plantillas listas y dejar de improvisar. No uses signos de apertura. No menciones precios ni alias salvo que pregunten precio o como comprar. Cerrá con una pregunta corta solo si ayuda.",
   "Primer mensaje util despues de un audio de saludo: maximo 4 lineas. Deci: Kit Yoga Pro tiene 6 modulos con videos/audios. Base $14999. Completo $24999 con 3 bonus. Alias ofiprof.mp. Una pregunta corta al final.",
 ]);
 migrateDefaultSetting("next_reply_prompt", DEFAULT_NEXT_REPLY_PROMPT, [
   LEGACY_NEXT_REPLY_PROMPT,
   LEGACY_HUMANIZED_NEXT_REPLY_PROMPT,
+  PROFESSIONAL_ONLY_NEXT_REPLY_PROMPT,
   "Ya hay conversacion previa. Responde en 1 a 3 lineas, segun contexto, y no repitas toda la presentacion salvo que la persona la pida.",
   "Ya hay conversacion previa. Responde como persona real en 1 o 2 lineas, con foco en organizacion de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar. No lo lleves a práctica personal salvo que lo pidan. No uses signos de apertura. No menciones precios ni alias salvo que pregunten precio o como comprar.",
   "Ya hay conversacion previa. Responde como persona real en 1 o 2 lineas, con foco en organizacion de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar. No lo lleves a práctica personal salvo que lo pidan. No uses signos de apertura. Si mencionas precio, siempre deci que por hoy esta $4999 y antes estaba $26999.",
@@ -578,23 +604,20 @@ migrateDefaultSetting("ask_name_text", DEFAULT_ASK_NAME_TEXT, [
   LEGACY_ASK_NAME_TEXT,
   "¡Hola! 👋 ¿Cómo te llamás?",
 ]);
-migrateDefaultSetting("reminder_detail_text", DEFAULT_REMINDER_DETAIL_TEXT, []);
-migrateDefaultSetting("reminder_product_description", DEFAULT_REMINDER_PRODUCT_DESCRIPTION, []);
 migrateDefaultSetting("reminder2_offer_text", DEFAULT_REMINDER2_OFFER_TEXT, []);
 
-for (const key of ["master_prompt", "followup_text", "first_reply_prompt", "next_reply_prompt", "followup_reminder_text"]) {
+for (const key of ["master_prompt", "followup_text", "first_reply_prompt", "next_reply_prompt"]) {
   replaceSettingText(key, "ofiprof.mp", "kit.yogapro");
 }
 
 // Price migration: $4.999 → $14.999 in all relevant settings
-for (const key of ["master_prompt", "followup_text", "next_reply_prompt", "followup_reminder_text"]) {
+for (const key of ["master_prompt", "followup_text", "next_reply_prompt"]) {
   replaceSettingText(key, "$4.999", "$14.999");
   replaceSettingText(key, "$4999", "$14999");
 }
 replaceSettingText("master_prompt", "Solo por hoy $4.999", "Solo por hoy $14.999");
 replaceSettingText("master_prompt", "siempre usá $4.999", "siempre usá $14.999");
 replaceSettingText("next_reply_prompt", "siempre decí $4.999", "siempre decí $14.999");
-replaceSettingText("followup_reminder_text", "oferta de $4.999", "oferta de $14.999");
 
 // Bombazo price migration: catch ALL variants of 4999 → 6999
 replaceSettingText("flash_offer_text", "$4.999", "$6.999");
@@ -609,6 +632,7 @@ replaceSettingText("next_reply_prompt", "tono humano de WhatsApp", "tono humano 
 
 updateSettings({ followup_enabled: "false" });
 clearAllScheduledFollowUps();
+db.prepare("UPDATE contacts SET reminder_scheduled_at = NULL WHERE reminder_scheduled_at IS NOT NULL").run();
 
 db.prepare(
   `UPDATE contacts
@@ -1090,12 +1114,13 @@ export function clearHistory(phoneNumber) {
   ).run(nowIso(), phoneNumber);
 }
 
-export function markGreetingSent(phoneNumber) {
+export function claimInitialOffer(phoneNumber) {
   ensureContact(phoneNumber);
-  db.prepare("UPDATE contacts SET greeting_sent = 1, updated_at = ? WHERE phone_number = ?").run(
-    nowIso(),
-    phoneNumber
-  );
+  const result = db.prepare(
+    "UPDATE contacts SET greeting_sent = 1, updated_at = ? WHERE phone_number = ? AND greeting_sent = 0"
+  ).run(nowIso(), phoneNumber);
+
+  return result.changes === 1;
 }
 
 export function hasGreetingBeenSent(phoneNumber) {
@@ -1408,7 +1433,7 @@ function conversationSummaryFilter(options = {}) {
     consume(/bot activo/gi, "c.handoff = 0 AND c.paid = 0");
     consume(/producto liberado|acceso enviado|liberad[oa]?/gi, "c.product_link_sent = 1 OR c.promo_sent = 1");
     consume(/acceso pendiente/gi, "c.product_link_sent = 0");
-    if (!consume(/sin recordatorio/gi, "c.reminder_scheduled_at IS NULL")) consume(/recordatorio/gi, "c.reminder_scheduled_at IS NOT NULL");
+    if (!consume(/sin (?:recordatorio|downsell)/gi, "c.reminder2_scheduled_at IS NULL")) consume(/(?:recordatorio|downsell)/gi, "c.reminder2_scheduled_at IS NOT NULL");
     if (!consume(/muy interesado|3\+ respuestas/gi, "(SELECT COUNT(*) FROM messages search_interest WHERE search_interest.phone_number = c.phone_number AND search_interest.role = 'user') >= 3")) {
       if (!consume(/interesad[oa]?|2 respuestas/gi, "(SELECT COUNT(*) FROM messages search_interest WHERE search_interest.phone_number = c.phone_number AND search_interest.role = 'user') >= 2")) {
         consume(/inter[eé]s inicial|1 respuesta/gi, "(SELECT COUNT(*) FROM messages search_interest WHERE search_interest.phone_number = c.phone_number AND search_interest.role = 'user') = 1");
@@ -1509,8 +1534,8 @@ export function listConversationSummaries(options = {}) {
                c.promo_scheduled_at AS promoScheduledAt,
                c.promo_sent AS promoSent,
                c.promo_sent_at AS promoSentAt,
-               c.reminder_scheduled_at AS reminderScheduledAt,
-               c.reminder_sent_at AS reminderSentAt,
+               c.reminder2_scheduled_at AS reminderScheduledAt,
+               c.reminder2_sent_at AS reminderSentAt,
                c.last_incoming_at AS lastIncomingAt,
                c.created_at AS createdAt,
                c.updated_at AS updatedAt,
@@ -1987,15 +2012,11 @@ export function updateSettings(settings) {
   }
 }
 
-function computeReminderDate(from = new Date()) {
-  return new Date(from.getTime() + 6 * 60 * 60 * 1000);
-}
-
-function computeFlashOfferDate(from = new Date()) {
+function computeDownsellDate(from = new Date()) {
   return new Date(from.getTime() + 23 * 60 * 60 * 1000);
 }
 
-export function scheduleReminder(phoneNumber, conversationId) {
+export function scheduleDownsell(phoneNumber, conversationId) {
   ensureContact(phoneNumber, { conversationId });
 
   const contact = getContact(phoneNumber);
@@ -2003,37 +2024,17 @@ export function scheduleReminder(phoneNumber, conversationId) {
     return null;
   }
 
-  const reminderAt = computeReminderDate().toISOString();
-  const flashAt = computeFlashOfferDate().toISOString();
+  const downsellAt = computeDownsellDate().toISOString();
   db.prepare(
     `UPDATE contacts
-     SET reminder_scheduled_at = ?,
+     SET reminder_scheduled_at = NULL,
           reminder2_scheduled_at = ?,
           conversation_id = COALESCE(NULLIF(?, ''), conversation_id),
           updated_at = ?
       WHERE phone_number = ?`
-  ).run(reminderAt, flashAt, conversationId ?? "", nowIso(), phoneNumber);
+  ).run(downsellAt, conversationId ?? "", nowIso(), phoneNumber);
 
-  return reminderAt;
-}
-
-export function listDueReminders(date = new Date()) {
-  const now = date.toISOString();
-  return db
-    .prepare(
-      `SELECT *
-       FROM contacts
-       WHERE paid = 0
-         AND handoff = 0
-         AND promo_sent = 0
-          AND reminder_sent_at IS NULL
-           AND reminder_attempted_at IS NULL
-           AND reminder_scheduled_at IS NOT NULL
-           AND reminder_scheduled_at <= ?
-       ORDER BY reminder_scheduled_at ASC
-       LIMIT 25`
-    )
-    .all(now);
+  return downsellAt;
 }
 
 export function listDueReminder2s(date = new Date()) {
@@ -2055,26 +2056,6 @@ export function listDueReminder2s(date = new Date()) {
     .all(now);
 }
 
-export function claimDueReminder(phoneNumber, date = new Date()) {
-  const now = date.toISOString();
-  const result = db.prepare(
-    `UPDATE contacts
-     SET reminder_attempted_at = ?,
-         reminder_scheduled_at = NULL,
-         updated_at = ?
-     WHERE phone_number = ?
-       AND paid = 0
-       AND handoff = 0
-       AND promo_sent = 0
-       AND reminder_sent_at IS NULL
-       AND reminder_attempted_at IS NULL
-       AND reminder_scheduled_at IS NOT NULL
-       AND reminder_scheduled_at <= ?`
-  ).run(now, now, phoneNumber, now);
-
-  return result.changes === 1;
-}
-
 export function claimDueReminder2(phoneNumber, date = new Date()) {
   const now = date.toISOString();
   const result = db.prepare(
@@ -2093,17 +2074,6 @@ export function claimDueReminder2(phoneNumber, date = new Date()) {
   ).run(now, now, phoneNumber, now);
 
   return result.changes === 1;
-}
-
-export function markReminderSent(phoneNumber) {
-  ensureContact(phoneNumber);
-  db.prepare(
-    `UPDATE contacts
-      SET reminder_sent_at = ?,
-           reminder_scheduled_at = NULL,
-           updated_at = ?
-       WHERE phone_number = ?`
-  ).run(nowIso(), nowIso(), phoneNumber);
 }
 
 export function markReminder2Sent(phoneNumber) {

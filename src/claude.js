@@ -54,8 +54,8 @@ function containsPriceOrPaymentDetails(text) {
 
 function safeNoPriceProductReply() {
   return (
-    "Te cuento: el *Kit Yoga Pro* está pensado para profes de yoga que quieren organizar mejor sus clases y dejar de improvisar.\n" +
-    "Incluye plantillas, clases armadas y material de apoyo para preparar encuentros más claros y profesionales. Querés que te pase las opciones disponibles?"
+    "Te cuento: el *Kit Yoga Pro* sirve tanto para mejorar tu práctica en casa como para planificar clases si enseñás yoga.\n" +
+    "Incluye material progresivo, secuencias, videos, audios y herramientas prácticas. Qué parte te gustaría conocer mejor?"
   );
 }
 
@@ -241,12 +241,12 @@ export async function getAIResponse(phoneNumber, userMessage, history, options =
   const isPriceInquiry = Boolean(options.isPriceInquiry);
   const firstReplyPrompt = isPriceInquiry
     ? getSetting("first_reply_prompt")
-    : "Primer mensaje util: 1 o 2 lineas, tono humano de chat. Si vienen de un anuncio o preguntan por el Kit Yoga Pro, contá natural que está pensado para profes de yoga que quieren organizar clases, usar plantillas listas y dejar de improvisar. No menciones precios ni alias de pago. No uses signos de apertura. Cerrá con una pregunta corta solo si ayuda.";
+    : "Primer mensaje útil de IA después de la oferta inicial: respondé en 1 o 2 líneas según la duda. Adaptá el beneficio a práctica en casa o uso profesional, sin repetir toda la oferta, el alias ni el nombre de la cuenta.";
   const salesBoundary = isPaidContact
     ? ""
     : isPriceInquiry
       ? "La persona pregunto por precio, valor, pago o compra. Si mencionas precio, siempre deci que por hoy esta $14999 y antes estaba $26999. No escribas alias ni nombre de cuenta; el sistema los manda separados despues del video para que sean faciles de copiar."
-      : "No menciones precios, alias de pago ni instrucciones de compra salvo que la persona pregunte explicitamente por precio, valor, pago o como comprar. Si viene de un anuncio o pregunta por el producto, explicá que ayuda a profes de yoga a organizar clases, usar plantillas listas y dejar de improvisar. No lo vendas como práctica personal salvo que lo pidan.";
+      : "No menciones precios, alias de pago ni instrucciones de compra salvo que la persona pregunte explícitamente por precio, valor, pago o cómo comprar. Adaptá la respuesta a su objetivo: mejorar la práctica en casa o usar el material para planificar y enseñar yoga.";
   const messages = [
     { role: "system", content: getSetting("master_prompt") },
     {

@@ -12,6 +12,7 @@ import {
 import { consumeInboxConversationPages, shouldProcessCtwaBackfillConversation, shouldRunCtwaBackfill } from "./ctwaBackfill.js";
 import { BUSINESS_TIME_ZONE, businessDateKey as localDateKey, parseBusinessDateKey as parseDateKey, shiftBusinessDateKey as shiftDateKey } from "./businessDate.js";
 import { buildConversationFlow, validateFlowSettings } from "./conversationFlow.js";
+import { hasCommercialPaymentContext, isMaterialPreviewConfirmation, shouldAutoProcessPaymentAttachment } from "./conversationPolicy.js";
 import { adminSectionDataNeeds, buildAdminConversationQuery, createAsyncTtlCache, isFreshTimestamp, isValidDateKey, mapWithConcurrency } from "./adminPerformance.js";
 import { DEFAULT_META_AD_ACCOUNT_NAME, hasMetaAdsActivity, metaSpendInArs, primaryMetaAdAccountId, selectPrimaryMetaAdAccount, shouldReplaceLegacyMetaAdsMetrics } from "./metaAdsPolicy.js";
 import { observeMetric, performanceSnapshot } from "./performanceMetrics.js";
@@ -35,7 +36,7 @@ import {
   getHistory,
   addMessage,
   clearHistory,
-  markGreetingSent,
+  claimInitialOffer,
   hasGreetingBeenSent,
   markGreetingAudioSent,
   hasGreetingAudioBeenSent,
@@ -58,12 +59,9 @@ import {
   getSettings,
   updateSettings,
   getSetting,
-  scheduleReminder,
-  listDueReminders,
+  scheduleDownsell,
   listDueReminder2s,
-  claimDueReminder,
   claimDueReminder2,
-  markReminderSent,
   markReminder2Sent,
   markProductReleased,
   saveContactCtwaAttribution,
@@ -73,7 +71,6 @@ import {
   markNameAsked,
   getContactName,
   deleteContact,
-  DEFAULT_INFO_PAYMENT_TEXT,
   markMaterialPreviewOffered,
   hasMaterialPreviewBeenOffered,
   markMaterialVideoSent,
@@ -108,10 +105,6 @@ const MATERIAL_PAYMENT_ALIAS_TEXT = "kit.yogapro";
 const MATERIAL_PAYMENT_NOTE_TEXT = "Te comparto el alias de mi pareja Nicolás Stamm. cualquier cosa escribime por acá";
 const FLOW_AUDIOS = {
   greeting: { voiceFile: "saludo.ogg", audioFile: "saludo.mp3", label: "audio saludo" },
-  productInfo: { voiceFile: "info-del-producto.ogg", audioFile: "info-del-producto.mp3", label: "audio info del producto" },
-  beforeVideo: { voiceFile: "antes-del-video.ogg", audioFile: "antes-del-video.mp3", label: "audio antes del video" },
-  reminder23h: { voiceFile: "23horas.ogg", audioFile: "23horas.mp3", label: "audio recordatorio 23h" },
-  paymentProof: { voiceFile: "comprobante.ogg", audioFile: "comprobante.mp3", label: "audio comprobante" },
 };
 const pendingAudioFallbacks = new Map();
 
@@ -365,19 +358,6 @@ function hasPaymentProofText(text) {
 
 function looksLikePaymentProof(text, message) {
   return hasPaymentAttachment(message) || hasPaymentProofText(text);
-}
-
-function hasCommercialPaymentContext(contact, history, phoneNumber) {
-  if (contact.product_link_sent || contact.promo_sent) return true;
-  if (hasMaterialPreviewBeenOffered(phoneNumber) || hasMaterialVideoBeenSent(phoneNumber)) return true;
-
-  return history.some(
-    (item) =>
-      item.role === "assistant" &&
-      /kit\.yogapro|ofiprof\.mp|\$\s?4[\s.,]?999|4[\s.,]?999|comprobante|transfer|acceso|te libero|producto liberado/i.test(
-        item.content ?? ""
-      )
-  );
 }
 
 function humanDelayFor(text) {
@@ -751,12 +731,6 @@ function extractLikelyName(text) {
   return extractNameCapture(text).name;
 }
 
-function looksLikeGreetingOnly(text) {
-  return /^(hola+|buenas|buenos dias|buen día|buen dia|buenas tardes|buenas noches|hey|holi|hello|hi)[!.\s]*$/i.test(
-    String(text ?? "").trim()
-  );
-}
-
 const EMOJI_ONLY_RE = /^(?:\s*(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Emoji_Modifier_Base}\p{Emoji_Modifier}?|\p{Emoji_Component}|\s\u200d)+\s*)+$/u;
 
 function isEmojiOnly(text) {
@@ -769,67 +743,12 @@ function looksLikePriceInquiry(text) {
   );
 }
 
-function looksLikeAffirmativeProductInterest(text) {
-  return /^(s[ií]+|si+|dale|ok|okay|quiero|contame|cuentame|cuéntame|pasame|pas[aá]me|mandame|m[aá]ndame|quiero saber m[aá]s|me interesa|claro|perfecto)(?:[!.\s]+(dale|contame|cuentame|cuéntame|porfa|por favor|quiero|saber m[aá]s))*[!.\s]*$/i.test(
-    String(text ?? "").trim()
-  );
-}
-
-function looksLikeMaterialPreviewOk(text) {
-  return /^(s[ií]+|si+|dale|ok|okay|okey|perfecto|claro|de una|bueno|mand[aá]lo|mandame|m[aá]ndame|pasame|pas[aá]me|envi[aá]lo|enviame|quiero verlo|quiero ver|me sirve)(?:[!.\s]+(dale|porfa|por favor|gracias|mand[aá]lo|pasame|envi[aá]lo))*[!.\s]*$/i.test(
-    String(text ?? "").trim()
-  );
-}
-
-function wasAskedProductIntro(history) {
-  const lastAssistant = [...history].reverse().find((item) => item.role === "assistant");
-
-  return /quer[eé]s que te cuente sobre el kit yoga pro/i.test(lastAssistant?.content ?? "");
-}
-
 function wasMaterialPreviewOfferedInHistory(history) {
   const lastAssistant = [...history].reverse().find((item) => item.role === "assistant");
 
-  return /si me das el ok|vista del material|no compres a ciegas|ver la calidad/i.test(
+  return /si me das el ok|vista del material|no compres a ciegas|ver la calidad|te comparto un video|veas por dentro/i.test(
     lastAssistant?.content ?? ""
   );
-}
-
-function looksLikeProductInquiry(text) {
-  return /info|informaci[oó]n|detalle|detalles|kit|yoga|producto|curso|pack|bonus|m[oó]dulo|contenido|material|clase|clases|plantilla|plantillas|secuencia|secuencias|profe|profesor|profesora|instructor|instructora|enseñar|enseño|alumno|alumnos|organizar|organizaci[oó]n|planificar|improvisar|improviso|improvisando|video|audio|rutina|pr[aá]ctica|anuncio|publicidad|publi|ad\b|instagram|facebook|meta\b|ig\b|fb\b/i.test(
-    String(text ?? "")
-  );
-}
-
-async function sendProductImageIfNeeded(req, conversationId, phoneNumber, isLocalTest, options = {}) {
-  if (hasGreetingBeenSent(phoneNumber)) return;
-
-  const imageUrl = `${publicBaseUrl(req)}/media/info.jpeg`;
-
-  if (isLocalTest) {
-    console.log(`🧪 Local test product image: ${imageUrl}`);
-    console.log(`🧪 Local test product info audio: ${publicAudioUrl(req, "productInfo")}`);
-    markGreetingSent(phoneNumber);
-    return;
-  }
-
-  if (!isPublicHttpsUrl(imageUrl)) {
-    console.warn(`⚠️ Product image skipped. URL must be public HTTPS: ${imageUrl}`);
-    return;
-  }
-
-  try {
-    console.log(`🖼️ Sending product image to ${phoneNumber}: ${imageUrl}`);
-    await sendWhatsAppMedia(conversationId, imageUrl, "image", zernioOptionsFor(options));
-    console.log(`🖼️ Product image sent to ${phoneNumber}`);
-    addMessage(phoneNumber, "assistant", "[imagen info producto]", { conversationId });
-    await sleep(700);
-    const audioSent = await sendFlowAudio(req, conversationId, phoneNumber, "productInfo", isLocalTest, options);
-    if (audioSent) addMessage(phoneNumber, "assistant", "[audio info del producto]", { conversationId });
-    markGreetingSent(phoneNumber);
-  } catch (err) {
-    console.warn(`⚠️ Product image failed for ${phoneNumber}:`, err.message);
-  }
 }
 
 async function sendMaterialVideoIfApproved(req, conversationId, phoneNumber, isLocalTest, options = {}) {
@@ -866,70 +785,6 @@ async function sendMaterialVideoIfApproved(req, conversationId, phoneNumber, isL
   }
 }
 
-async function processDueReminders() {
-  const due = listDueReminders();
-
-  for (const contact of due) {
-    // Automated reminders fail closed so a partial provider failure cannot resend earlier messages.
-    if (!claimDueReminder(contact.phone_number)) continue;
-
-    const freshContact = getContact(contact.phone_number);
-    if (freshContact.paid || freshContact.handoff || freshContact.promo_sent) {
-      continue;
-    }
-
-    if (!contact.conversation_id) {
-      console.warn(`⚠️ 6h reminder skipped for ${contact.phone_number}: missing conversationId`);
-      continue;
-    }
-
-    try {
-      const options = zernioOptionsFor(contact);
-
-      const audioSent = await sendFlowAudio(null, contact.conversation_id, contact.phone_number, "reminder23h", false, contact);
-      if (audioSent) {
-        addMessage(contact.phone_number, "assistant", "[audio recordatorio 6h]", { conversationId: contact.conversation_id });
-      }
-
-      const detailText = getSetting("reminder_detail_text", "").trim();
-      if (detailText) {
-        await sendReminderText(contact, detailText, options, "6h detail");
-      }
-
-      const productDesc = getSetting("reminder_product_description", "").trim();
-      if (productDesc) {
-        await sleep(900);
-        await sendReminderText(contact, productDesc, options, "6h product description");
-      }
-
-      if (!audioSent && !detailText && !productDesc) {
-        const fallbackText = getSetting("followup_reminder_text", "").trim();
-        if (!fallbackText) continue;
-
-        try {
-          await sendTypingIndicator(contact.conversation_id, options);
-        } catch (typingErr) {
-          console.warn(`⚠️ Typing indicator failed before 6h fallback for ${contact.phone_number}:`, typingErr.message);
-        }
-        await sleep(humanDelayFor(fallbackText));
-        await sendWhatsAppMessage(contact.conversation_id, fallbackText, options);
-        addMessage(contact.phone_number, "assistant", fallbackText, { conversationId: contact.conversation_id });
-      }
-
-      markReminderSent(contact.phone_number);
-      console.log(`📣 6h reminder sent to ${contact.phone_number}`);
-    } catch (err) {
-      if (isPermanentReminderSendError(err)) {
-        markReminderSent(contact.phone_number);
-        console.warn(`⏭️ 6h reminder stopped for ${contact.phone_number}: ${err.message}`);
-        continue;
-      }
-
-      console.error(`❌ Error sending 6h reminder to ${contact.phone_number}; automatic retry disabled:`, err.message);
-    }
-  }
-}
-
 async function sendReminderText(contact, text, options, label) {
   const chunks = reminderTextChunks(text, contact.channel);
 
@@ -950,7 +805,7 @@ async function sendReminderText(contact, text, options, label) {
   }
 }
 
-async function processDueReminder2s() {
+async function processDueDownsells() {
   const due = listDueReminder2s();
 
   for (const contact of due) {
@@ -963,7 +818,7 @@ async function processDueReminder2s() {
     }
 
     if (!contact.conversation_id) {
-      console.warn(`⚠️ 23h reminder skipped for ${contact.phone_number}: missing conversationId`);
+      console.warn(`⚠️ 23h downsell skipped for ${contact.phone_number}: missing conversationId`);
       continue;
     }
 
@@ -972,17 +827,17 @@ async function processDueReminder2s() {
       if (!text) continue;
 
       const options = zernioOptionsFor(contact);
-      await sendReminderText(contact, text, options, "23h offer");
+      await sendReminderText(contact, text, options, "23h downsell");
       markReminder2Sent(contact.phone_number);
-      console.log(`📣 23h offer sent to ${contact.phone_number}`);
+      console.log(`📣 23h downsell sent to ${contact.phone_number}`);
     } catch (err) {
       if (isPermanentReminderSendError(err)) {
         markReminder2Sent(contact.phone_number);
-        console.warn(`⏭️ 23h reminder stopped for ${contact.phone_number}: ${err.message}`);
+        console.warn(`⏭️ 23h downsell stopped for ${contact.phone_number}: ${err.message}`);
         continue;
       }
 
-      console.error(`❌ Error sending 23h reminder to ${contact.phone_number}; automatic retry disabled:`, err.message);
+      console.error(`❌ Error sending 23h downsell to ${contact.phone_number}; automatic retry disabled:`, err.message);
     }
   }
 }
@@ -2370,7 +2225,7 @@ function nextActionFor(conversation) {
   if (conversation.paid && !conversation.productLinkSent) return { label: "Enviar acceso", tone: "danger" };
   if (conversation.paid) return { label: "Cliente completo", tone: "good" };
   if (conversation.promoSent || conversation.productLinkSent) return { label: "Esperando pago", tone: "soft" };
-  if (conversation.reminderScheduledAt) return { label: "Recordatorio 23h", tone: "soft" };
+  if (conversation.reminderScheduledAt) return { label: "Downsell 23h", tone: "soft" };
   return { label: "Bot trabajando", tone: "neutral" };
 }
 
@@ -2387,7 +2242,7 @@ function conversationSearchText(conversation, extra = []) {
     conversation.handoff ? "revision humana pausado" : "bot activo",
     conversation.productLinkSent ? "acceso enviado liberado" : "acceso pendiente",
     conversation.promoSent ? "producto liberado" : "sin liberacion",
-    conversation.reminderScheduledAt ? "recordatorio 23h programado" : "sin recordatorio",
+    conversation.reminderScheduledAt ? "downsell 23h programado" : "sin downsell",
     `${conversation.leadReplyCount ?? 0} respuestas lead interes`,
     leadInterest(conversation).label,
     ...extra,
@@ -2461,14 +2316,14 @@ function renderConversationTable(req, conversations, options = {}) {
         ? `Acceso enviado${conversation.productLinkSentAt ? ` · ${formatDateTime(conversation.productLinkSentAt)}` : ""}`
         : "Acceso pendiente";
       const promoDetail = conversation.paid
-          ? "Comprador: recordatorio pausado"
+          ? "Comprador: downsell pausado"
         : conversation.promoSent
           ? `Producto liberado${conversation.promoSentAt ? ` · ${formatDateTime(conversation.promoSentAt)}` : ""}`
           : conversation.reminderScheduledAt
-            ? `Recordatorio 23h · ${formatDateTime(conversation.reminderScheduledAt)}`
+            ? `Downsell 23h · ${formatDateTime(conversation.reminderScheduledAt)}`
             : conversation.reminderSentAt
-              ? `Recordatorio enviado · ${formatDateTime(conversation.reminderSentAt)}`
-              : "Sin recordatorio programado";
+              ? `Downsell enviado · ${formatDateTime(conversation.reminderSentAt)}`
+              : "Sin downsell programado";
       const adDetail = conversation.ctwaSourceId
         ? `Anuncio: ${conversation.ctwaHeadline || conversation.ctwaSourceId}`
         : "Sin anuncio atribuido";
@@ -3998,13 +3853,10 @@ function renderAdminPage(req, context = {}) {
             ${adminHiddenFields(req, { section: "settings" })}
             <div class="settings-grid">
               <label class="wide">Prompt maestro<textarea name="master_prompt">${escapeHtml(settings.master_prompt)}</textarea></label>
-              <label class="wide">Regla del primer mensaje<textarea name="first_reply_prompt">${escapeHtml(settings.first_reply_prompt)}</textarea></label>
               <label class="wide">Regla de respuestas siguientes<textarea name="next_reply_prompt">${escapeHtml(settings.next_reply_prompt)}</textarea></label>
               <label class="wide">Regla para compradores<textarea name="paid_reply_prompt">${escapeHtml(settings.paid_reply_prompt)}</textarea></label>
-              <label class="wide">Texto fallback recordatorio (audio falla)<textarea name="followup_reminder_text">${escapeHtml(settings.followup_reminder_text ?? "")}</textarea></label>
-              <label class="wide">Texto recordatorio 6h (después del audio)<textarea name="reminder_detail_text">${escapeHtml(settings.reminder_detail_text ?? "")}</textarea></label>
-              <label class="wide">Descripción del producto 6h<textarea name="reminder_product_description">${escapeHtml(settings.reminder_product_description ?? "")}</textarea></label>
-              <label class="wide">Oferta 23h (descuento automático)<textarea name="reminder2_offer_text">${escapeHtml(settings.reminder2_offer_text ?? "")}</textarea></label>
+              <label class="wide">Oferta inicial + confirmación de video<textarea name="initial_offer_text">${escapeHtml(settings.initial_offer_text ?? "")}</textarea></label>
+              <label class="wide">Downsell 23h<textarea name="reminder2_offer_text">${escapeHtml(settings.reminder2_offer_text ?? "")}</textarea></label>
               <label class="wide">Mensaje Bombazo $6999<textarea name="flash_offer_text">${escapeHtml(settings.flash_offer_text ?? "")}</textarea></label>
               <label class="wide">Link de acceso al producto<input name="product_access_url" value="${escapeHtml(settings.product_access_url)}"></label>
               <label class="wide">Mensaje de entrega post-pago<textarea name="product_delivery_text">${escapeHtml(settings.product_delivery_text)}</textarea></label>
@@ -4553,12 +4405,9 @@ app.post("/admin/revenue-adjustment", requireAdmin, (req, res) => {
 app.post("/admin/settings", requireAdmin, (req, res) => {
   updateSettings({
     master_prompt: req.body.master_prompt ?? "",
-    first_reply_prompt: req.body.first_reply_prompt ?? "",
     next_reply_prompt: req.body.next_reply_prompt ?? "",
     paid_reply_prompt: req.body.paid_reply_prompt ?? "",
-    followup_reminder_text: req.body.followup_reminder_text ?? "",
-    reminder_detail_text: req.body.reminder_detail_text ?? "",
-    reminder_product_description: req.body.reminder_product_description ?? "",
+    initial_offer_text: String(req.body.initial_offer_text ?? "").trim() || getSetting("initial_offer_text"),
     reminder2_offer_text: req.body.reminder2_offer_text ?? "",
     ask_name_text: req.body.ask_name_text ?? "",
     flash_offer_text: req.body.flash_offer_text ?? "",
@@ -4675,13 +4524,23 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       return;
     }
 
-    const hasPaymentContext = hasCommercialPaymentContext(contact, history, phoneNumber);
+    const hasPaymentContext = hasCommercialPaymentContext(contact, history, hasMaterialVideoBeenSent(phoneNumber));
     const isContextualPaymentAttachment = hasPaymentAttachment(message) && hasPaymentContext;
 
     if (!contact.paid && isContextualPaymentAttachment) {
       addMessage(phoneNumber, "user", userMessage || "[comprobante adjunto]", { conversationId });
       const imageUrl = getPaymentImageAttachmentUrl(message);
       const proofDetails = await extractAndSavePaymentName(phoneNumber, userMessage, imageUrl);
+      if (!shouldAutoProcessPaymentAttachment(hasPaymentContext, proofDetails)) {
+        requestHumanHandoff(phoneNumber, {
+          reason: "unverified_payment_attachment",
+          lastMessage: userMessage || "[adjunto sin comprobante confirmado]",
+          conversationId,
+        });
+        await reply("No pude confirmar automáticamente que el archivo sea un comprobante. Lo dejamos para revisión antes de habilitar el acceso.");
+        console.warn(`⚠️ Unverified payment attachment sent to review for ${phoneNumber}`);
+        return;
+      }
       const product = PAYMENT_PRODUCTS.promo;
       const amount = proofDetails.amount > 0 ? proofDetails.amount : product.amount;
       const discount = Math.max(0, 26999 - amount);
@@ -4699,12 +4558,6 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       sendPurchaseConversionForPayment(paymentId, phoneNumber, { conversationId, amount, contact }).catch((err) => {
         console.warn(`⚠️ Meta conversion background task failed for ${phoneNumber}:`, err.message);
       });
-
-      const proofAudioSent = await sendFlowAudio(req, conversationId, phoneNumber, "paymentProof", isLocalTest, identity);
-      if (proofAudioSent) {
-        addMessage(phoneNumber, "assistant", "[audio comprobante]", { conversationId });
-        await sleep(900);
-      }
 
       const deliveryText = buildPaidProofDeliveryText(wasAccessAlreadySent);
       addMessage(phoneNumber, "assistant", deliveryText, { conversationId });
@@ -4727,6 +4580,34 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       return;
     }
 
+    if (!contact.paid && !hasGreetingBeenSent(phoneNumber)) {
+      if (!claimInitialOffer(phoneNumber)) {
+        console.log(`⏭️ Initial offer already claimed for ${phoneNumber}`);
+        return;
+      }
+
+      addMessage(phoneNumber, "user", messageForAI, { conversationId });
+      const scheduledAt = scheduleDownsell(phoneNumber, conversationId);
+      if (scheduledAt) {
+        console.log(`⏰ 23h downsell scheduled for ${phoneNumber}: ${scheduledAt}`);
+      }
+
+      await sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, identity);
+      await sleep(700);
+
+      const offerText = getSetting("initial_offer_text", "").trim();
+      const offerChunks = reminderTextChunks(offerText, channel);
+      if (!offerChunks.length) throw new Error("initial_offer_text is empty");
+
+      for (const chunk of offerChunks) {
+        await reply(chunk);
+        addMessage(phoneNumber, "assistant", chunk, { conversationId });
+      }
+
+      markMaterialPreviewOffered(phoneNumber);
+      return;
+    }
+
     const MATERIAL_VIDEO_COOLDOWN_MS = 20000;
     const videoSentAt = getMaterialVideoSentAt(phoneNumber);
     if (videoSentAt) {
@@ -4742,20 +4623,12 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
     const shouldSendMaterialVideo =
       !contact.paid &&
       !hasMaterialVideoBeenSent(phoneNumber) &&
-      (hasMaterialPreviewBeenOffered(phoneNumber) || wasMaterialPreviewOfferedInHistory(history));
+      (hasMaterialPreviewBeenOffered(phoneNumber) || wasMaterialPreviewOfferedInHistory(history)) &&
+      isMaterialPreviewConfirmation(effectiveUserMessage);
 
     if (shouldSendMaterialVideo) {
       addMessage(phoneNumber, "user", effectiveUserMessage, { conversationId });
-      const scheduledAt = scheduleReminder(phoneNumber, conversationId);
-      if (scheduledAt) {
-        console.log(`⏰ 23h reminder scheduled for ${phoneNumber}: ${scheduledAt}`);
-      }
       markMaterialPreviewOffered(phoneNumber);
-      const beforeVideoAudioSent = await sendFlowAudio(req, conversationId, phoneNumber, "beforeVideo", isLocalTest, identity);
-      if (beforeVideoAudioSent) {
-        addMessage(phoneNumber, "assistant", "[audio antes del video]", { conversationId });
-        await sleep(900);
-      }
       const videoSent = await sendMaterialVideoIfApproved(req, conversationId, phoneNumber, isLocalTest, identity);
       if (videoSent) {
         addMessage(phoneNumber, "assistant", "[video muestra del material]", { conversationId });
@@ -4772,39 +4645,7 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       return;
     }
 
-    const isFirstAIReply = history.length === 0;
-    const isGreetingOnly = looksLikeGreetingOnly(effectiveUserMessage);
     const isPriceInquiry = looksLikePriceInquiry(effectiveUserMessage);
-    const isContextualProductInterest =
-      !isFirstAIReply && wasAskedProductIntro(history) && looksLikeAffirmativeProductInterest(effectiveUserMessage);
-    const isProductInquiry = looksLikeProductInquiry(effectiveUserMessage) || isPriceInquiry || isContextualProductInterest;
-    const shouldSendInfoPaymentText =
-      !contact.paid && isProductInquiry && !hasMaterialPreviewBeenOffered(phoneNumber);
-
-    if (isFirstAIReply && !contact.paid && isGreetingOnly) {
-      const greetingText = "Querés que te cuente sobre el Kit Yoga Pro?";
-
-      addMessage(phoneNumber, "user", effectiveUserMessage, { conversationId });
-      const scheduledAt = scheduleReminder(phoneNumber, conversationId);
-      if (scheduledAt) {
-        console.log(`⏰ 23h reminder scheduled for ${phoneNumber}: ${scheduledAt}`);
-      }
-      await sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, identity);
-      await sleep(700);
-      addMessage(phoneNumber, "assistant", greetingText, { conversationId });
-      await reply(greetingText);
-      console.log(`🤖 [${phoneNumber}] ${greetingText}`);
-      return;
-    }
-
-    const shouldSendInitialMedia = !contact.paid && !hasGreetingBeenSent(phoneNumber) && isProductInquiry;
-
-    if (shouldSendInitialMedia) {
-      await sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, identity);
-      await sleep(700);
-      await sendProductImageIfNeeded(req, conversationId, phoneNumber, isLocalTest, identity);
-      await sleep(900);
-    }
 
     const aiReply = await getAIResponse(phoneNumber, effectiveUserMessage, history, {
       isPaidContact: Boolean(contact.paid),
@@ -4812,19 +4653,8 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
     });
 
     addMessage(phoneNumber, "user", effectiveUserMessage, { conversationId });
-    const scheduledAt = scheduleReminder(phoneNumber, conversationId);
-    if (scheduledAt) {
-      console.log(`⏰ 23h reminder scheduled for ${phoneNumber}: ${scheduledAt}`);
-    }
     addMessage(phoneNumber, "assistant", aiReply, { conversationId });
-
-    const finalReply = shouldSendInfoPaymentText ? `${aiReply}\n\n${DEFAULT_INFO_PAYMENT_TEXT}` : aiReply;
-    await reply(finalReply);
-
-    if (shouldSendInfoPaymentText) {
-      addMessage(phoneNumber, "assistant", DEFAULT_INFO_PAYMENT_TEXT, { conversationId });
-      markMaterialPreviewOffered(phoneNumber);
-    }
+    await reply(aiReply);
 
     console.log(`🤖 [${phoneNumber}] ${aiReply.slice(0, 80)}...`);
   } catch (err) {
@@ -4951,26 +4781,14 @@ app.get("/health", (_, res) => {
 });
 
 setInterval(() => {
-  processDueReminders().catch((err) => {
-    console.error("❌ Reminder worker error:", err.message);
-  });
-}, 30_000);
-
-setInterval(() => {
-  processDueReminder2s().catch((err) => {
-    console.error("❌ Reminder2 worker error:", err.message);
+  processDueDownsells().catch((err) => {
+    console.error("❌ Downsell worker error:", err.message);
   });
 }, 30_000);
 
 setTimeout(() => {
-  processDueReminders().catch((err) => {
-    console.error("❌ Reminder worker error:", err.message);
-  });
-}, 5_000);
-
-setTimeout(() => {
-  processDueReminder2s().catch((err) => {
-    console.error("❌ Reminder2 worker error:", err.message);
+  processDueDownsells().catch((err) => {
+    console.error("❌ Downsell worker error:", err.message);
   });
 }, 5_000);
 

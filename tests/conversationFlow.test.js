@@ -28,7 +28,7 @@ test("every editable flow setting is represented by exactly one node", () => {
 test("flow keeps all core runtime stages visible", () => {
   const nodeIds = new Set(CONVERSATION_FLOW.nodes.map((node) => node.id));
   const requiredStages = [
-    "incoming", "routing", "greeting", "product", "preview", "reminder", "reminder23h",
+    "incoming", "routing", "greeting", "product", "preview", "downsell23h",
     "payment", "attribution-recovery", "delivery", "paid", "manual", "handoff",
   ];
 
@@ -49,14 +49,11 @@ test("incoming flow documents account-scoped social identities", () => {
   assert.match(incoming.description, /identidades sociales por cuenta/i);
 });
 
-test("flow exposes previewable media for every audio and video step", () => {
+test("flow exposes only the greeting audio and material video", () => {
   const flow = buildConversationFlow();
   const expectedMedia = {
     greeting: ["/media/audios/saludo.mp3"],
-    product: ["/media/info.jpeg", "/media/audios/info-del-producto.mp3"],
-    preview: ["/media/audios/antes-del-video.mp3", "/media/videomaterial.mp4"],
-    reminder: ["/media/audios/23horas.mp3"],
-    payment: ["/media/audios/comprobante.mp3"],
+    preview: ["/media/videomaterial.mp4"],
   };
 
   for (const [nodeId, sources] of Object.entries(expectedMedia)) {
@@ -64,14 +61,17 @@ test("flow exposes previewable media for every audio and video step", () => {
     assert.deepEqual(node.media.map((item) => item.src), sources);
     assert.ok(node.media.every((item) => ["audio", "video", "image"].includes(item.type)));
   }
+
+  const audioMedia = flow.nodes.flatMap((node) => node.media ?? []).filter((item) => item.type === "audio");
+  assert.deepEqual(audioMedia.map((item) => item.src), ["/media/audios/saludo.mp3"]);
 });
 
 test("flow exposes current setting values on editable nodes", () => {
-  const flow = buildConversationFlow({ first_reply_prompt: "Hola desde settings" });
+  const flow = buildConversationFlow({ initial_offer_text: "Oferta desde settings" });
   const greeting = flow.nodes.find((node) => node.id === "greeting");
 
   assert.equal(greeting.editable, true);
-  assert.equal(greeting.fields[0].value, "Hola desde settings");
+  assert.equal(greeting.fields[0].value, "Oferta desde settings");
   assert.equal(flow.nodes.find((node) => node.id === "routing").editable, false);
 });
 
@@ -86,6 +86,12 @@ test("flow settings reject unknown fields", () => {
   const result = validateFlowSettings({ followup_enabled: "true" });
   assert.equal(result.ok, false);
   assert.match(result.error, /no es editable/);
+});
+
+test("flow rejects an empty initial offer", () => {
+  const result = validateFlowSettings({ initial_offer_text: "   " });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /no puede quedar vacío/);
 });
 
 test("flow settings validate URL and token boundaries", () => {
