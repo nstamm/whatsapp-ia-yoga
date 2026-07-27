@@ -1,4 +1,4 @@
-export const INSTAGRAM_MESSAGE_LIMIT = 1000;
+export const SOCIAL_MESSAGE_LIMIT = 1000;
 
 export function splitMessageText(text, maxLength) {
   const value = String(text ?? "").trim();
@@ -39,8 +39,8 @@ export function splitMessageText(text, maxLength) {
 }
 
 export function reminderTextChunks(text, channel) {
-  if (channel === "instagram") {
-    return splitMessageText(text, INSTAGRAM_MESSAGE_LIMIT);
+  if (["instagram", "facebook"].includes(channel)) {
+    return splitMessageText(text, SOCIAL_MESSAGE_LIMIT);
   }
 
   const value = String(text ?? "").trim();

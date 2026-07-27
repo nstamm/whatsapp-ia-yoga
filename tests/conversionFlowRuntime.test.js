@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { hasCommercialPaymentContext, isMaterialPreviewConfirmation, shouldAutoProcessPaymentAttachment } from "../src/conversationPolicy.js";
+import { hasCommercialPaymentContext, initialOfferTextChunks, isMaterialPreviewConfirmation, shouldAutoProcessPaymentAttachment } from "../src/conversationPolicy.js";
+import { SOCIAL_MESSAGE_LIMIT } from "../src/reminderPolicy.js";
 
 const indexSource = readFileSync(fileURLToPath(new URL("../src/index.js", import.meta.url)), "utf8");
 
@@ -38,4 +39,23 @@ test("only a confirmed payment proof can be auto-processed", () => {
   assert.equal(shouldAutoProcessPaymentAttachment(true, { isPaymentProof: true }), true);
   assert.equal(shouldAutoProcessPaymentAttachment(true, { isPaymentProof: false }), false);
   assert.equal(shouldAutoProcessPaymentAttachment(false, { isPaymentProof: true }), false);
+});
+
+test("initial offer starts its second message at the total contents marker", () => {
+  const offer = `Primera parte con la oferta.\n\nEn total recibís:\n\n9 PDFs + 6 videos`;
+  const chunks = initialOfferTextChunks(offer, "instagram");
+
+  assert.deepEqual(chunks, ["Primera parte con la oferta.", "En total recibís:\n\n9 PDFs + 6 videos"]);
+  assert.ok(chunks.every((chunk) => Array.from(chunk).length <= SOCIAL_MESSAGE_LIMIT));
+});
+
+test("initial offer protects both Instagram and Facebook message limits", () => {
+  const offer = `${"a".repeat(900)}\n\nEn total recibís:\n\n${"b".repeat(1_200)}`;
+
+  for (const channel of ["instagram", "facebook"]) {
+    const chunks = initialOfferTextChunks(offer, channel);
+    assert.equal(chunks[0], "a".repeat(900));
+    assert.equal(chunks[1].startsWith("En total recibís:"), true);
+    assert.ok(chunks.every((chunk) => Array.from(chunk).length <= SOCIAL_MESSAGE_LIMIT));
+  }
 });

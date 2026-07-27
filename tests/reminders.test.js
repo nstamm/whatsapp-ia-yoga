@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  INSTAGRAM_MESSAGE_LIMIT,
+  SOCIAL_MESSAGE_LIMIT,
   isPermanentReminderSendError,
   reminderTextChunks,
 } from "../src/reminderPolicy.js";
@@ -76,7 +76,7 @@ test("Instagram reminder text is split below the provider limit", () => {
   const chunks = reminderTextChunks(text, "instagram");
 
   assert.equal(chunks.length, 2);
-  assert.ok(chunks.every((chunk) => Array.from(chunk).length <= INSTAGRAM_MESSAGE_LIMIT));
+  assert.ok(chunks.every((chunk) => Array.from(chunk).length <= SOCIAL_MESSAGE_LIMIT));
   assert.equal(chunks[0], "a".repeat(700));
   assert.equal(chunks[1], "b".repeat(700));
 });

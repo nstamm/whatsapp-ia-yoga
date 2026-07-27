@@ -12,7 +12,7 @@ import {
 import { consumeInboxConversationPages, shouldProcessCtwaBackfillConversation, shouldRunCtwaBackfill } from "./ctwaBackfill.js";
 import { BUSINESS_TIME_ZONE, businessDateKey as localDateKey, parseBusinessDateKey as parseDateKey, shiftBusinessDateKey as shiftDateKey } from "./businessDate.js";
 import { buildConversationFlow, validateFlowSettings } from "./conversationFlow.js";
-import { hasCommercialPaymentContext, isMaterialPreviewConfirmation, shouldAutoProcessPaymentAttachment } from "./conversationPolicy.js";
+import { hasCommercialPaymentContext, initialOfferTextChunks, isMaterialPreviewConfirmation, shouldAutoProcessPaymentAttachment } from "./conversationPolicy.js";
 import { adminSectionDataNeeds, buildAdminConversationQuery, createAsyncTtlCache, isFreshTimestamp, isValidDateKey, mapWithConcurrency } from "./adminPerformance.js";
 import { DEFAULT_META_AD_ACCOUNT_NAME, hasMetaAdsActivity, metaSpendInArs, primaryMetaAdAccountId, selectPrimaryMetaAdAccount, shouldReplaceLegacyMetaAdsMetrics } from "./metaAdsPolicy.js";
 import { observeMetric, performanceSnapshot } from "./performanceMetrics.js";
@@ -4596,7 +4596,7 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       await sleep(700);
 
       const offerText = getSetting("initial_offer_text", "").trim();
-      const offerChunks = reminderTextChunks(offerText, channel);
+      const offerChunks = initialOfferTextChunks(offerText, channel);
       if (!offerChunks.length) throw new Error("initial_offer_text is empty");
 
       for (const chunk of offerChunks) {
