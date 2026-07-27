@@ -18,7 +18,7 @@ export const CONVERSATION_FLOW = Object.freeze({
       { type: "audio", label: "Audio de saludo", src: "/media/audios/saludo.mp3" },
     ] },
     { id: "product", title: "Dudas sobre el producto", subtitle: "Respuesta IA contextual", description: "Responde preguntas sin repetir la oferta y adapta los beneficios a práctica en casa o uso profesional.", type: "message", x: 590, y: 210, fields: ["master_prompt", "next_reply_prompt", "openai_max_tokens"] },
-    { id: "preview", title: "Confirmación y video", subtitle: "Video + alias de pago", description: "Si la persona confirma que quiere verlo, envía el video de muestra y luego el alias de pago en mensajes separados.", type: "action", x: 890, y: 40, media: [
+    { id: "preview", title: "Confirmación y video", subtitle: "Video + alias de pago", description: "Al segundo mensaje del contacto, envía el video de muestra y luego el alias de pago en mensajes separados, sin importar la respuesta.", type: "action", x: 890, y: 40, media: [
       { type: "video", label: "Video de muestra del material", src: "/media/videomaterial.mp4" },
     ] },
     { id: "downsell23h", title: "Downsell 23h", subtitle: "Oferta automática $6.999", description: "A las 23 horas de la oferta inicial, si el contacto aún no compró, envía una sola vez el precio especial de $6.999.", type: "message", x: 1190, y: 40, fields: ["reminder2_offer_text"] },

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { hasCommercialPaymentContext, initialOfferTextChunks, isMaterialPreviewConfirmation, shouldAutoProcessPaymentAttachment } from "../src/conversationPolicy.js";
+import { hasCommercialPaymentContext, initialOfferTextChunks, shouldAutoProcessPaymentAttachment } from "../src/conversationPolicy.js";
 import { SOCIAL_MESSAGE_LIMIT } from "../src/reminderPolicy.js";
 
 const indexSource = readFileSync(fileURLToPath(new URL("../src/index.js", import.meta.url)), "utf8");
@@ -16,15 +16,9 @@ test("runtime has no 6h reminder worker", () => {
   assert.doesNotMatch(indexSource, /processDueReminders|6h reminder|reminder_detail_text|reminder_product_description/);
 });
 
-test("runtime requires an affirmative reply before sending the material video", () => {
-  assert.match(indexSource, /isMaterialPreviewConfirmation\(effectiveUserMessage\)/);
-  for (const text of ["sí", "sí, por favor", "sí, quiero verlo", "sí, mandámelo", "dale, gracias", "mandámelo",
-    "dale ok", "dale mandamelo ok", "sí perfecto", "mandámelo claro", "ok dale", "si bueno"]) {
-    assert.equal(isMaterialPreviewConfirmation(text), true, `expected confirmation: ${text}`);
-  }
-  for (const text of ["no", "más adelante", "cuánto cuesta?"]) {
-    assert.equal(isMaterialPreviewConfirmation(text), false, `unexpected confirmation: ${text}`);
-  }
+test("runtime sends the material video on any reply after the initial offer", () => {
+  assert.doesNotMatch(indexSource, /isMaterialPreviewConfirmation/);
+  assert.match(indexSource, /shouldSendMaterialVideo/);
 });
 
 test("offering the video alone does not create payment context", () => {

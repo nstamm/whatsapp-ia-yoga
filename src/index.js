@@ -12,7 +12,7 @@ import {
 import { consumeInboxConversationPages, shouldProcessCtwaBackfillConversation, shouldRunCtwaBackfill } from "./ctwaBackfill.js";
 import { BUSINESS_TIME_ZONE, businessDateKey as localDateKey, parseBusinessDateKey as parseDateKey, shiftBusinessDateKey as shiftDateKey } from "./businessDate.js";
 import { buildConversationFlow, validateFlowSettings } from "./conversationFlow.js";
-import { hasCommercialPaymentContext, initialOfferTextChunks, isMaterialPreviewConfirmation, shouldAutoProcessPaymentAttachment } from "./conversationPolicy.js";
+import { hasCommercialPaymentContext, initialOfferTextChunks, shouldAutoProcessPaymentAttachment } from "./conversationPolicy.js";
 import { adminSectionDataNeeds, buildAdminConversationQuery, createAsyncTtlCache, isFreshTimestamp, isValidDateKey, mapWithConcurrency } from "./adminPerformance.js";
 import { DEFAULT_META_AD_ACCOUNT_NAME, hasMetaAdsActivity, metaSpendInArs, primaryMetaAdAccountId, selectPrimaryMetaAdAccount, shouldReplaceLegacyMetaAdsMetrics } from "./metaAdsPolicy.js";
 import { observeMetric, performanceSnapshot } from "./performanceMetrics.js";
@@ -740,14 +740,6 @@ function isEmojiOnly(text) {
 function looksLikePriceInquiry(text) {
   return /precio|valor|cu[aá]nto|cuanto|sale|cuesta|compr|pago|pag[ao]|alias|transfer|mercado ?pago|mp|prom[oó]|descuento/i.test(
     String(text ?? "")
-  );
-}
-
-function wasMaterialPreviewOfferedInHistory(history) {
-  const lastAssistant = [...history].reverse().find((item) => item.role === "assistant");
-
-  return /si me das el ok|vista del material|no compres a ciegas|ver la calidad|te comparto un video|veas por dentro/i.test(
-    lastAssistant?.content ?? ""
   );
 }
 
@@ -4619,15 +4611,13 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       }
     }
 
-    const effectiveUserMessage = messageForAI;
     const shouldSendMaterialVideo =
       !contact.paid &&
       !hasMaterialVideoBeenSent(phoneNumber) &&
-      (hasMaterialPreviewBeenOffered(phoneNumber) || wasMaterialPreviewOfferedInHistory(history)) &&
-      isMaterialPreviewConfirmation(effectiveUserMessage);
+      hasMaterialPreviewBeenOffered(phoneNumber);
 
     if (shouldSendMaterialVideo) {
-      addMessage(phoneNumber, "user", effectiveUserMessage, { conversationId });
+      addMessage(phoneNumber, "user", messageForAI, { conversationId });
       markMaterialPreviewOffered(phoneNumber);
       const videoSent = await sendMaterialVideoIfApproved(req, conversationId, phoneNumber, isLocalTest, identity);
       if (videoSent) {
@@ -4645,14 +4635,14 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       return;
     }
 
-    const isPriceInquiry = looksLikePriceInquiry(effectiveUserMessage);
+    const isPriceInquiry = looksLikePriceInquiry(messageForAI);
 
-    const aiReply = await getAIResponse(phoneNumber, effectiveUserMessage, history, {
+    const aiReply = await getAIResponse(phoneNumber, messageForAI, history, {
       isPaidContact: Boolean(contact.paid),
       isPriceInquiry,
     });
 
-    addMessage(phoneNumber, "user", effectiveUserMessage, { conversationId });
+    addMessage(phoneNumber, "user", messageForAI, { conversationId });
     addMessage(phoneNumber, "assistant", aiReply, { conversationId });
     await reply(aiReply);
 
