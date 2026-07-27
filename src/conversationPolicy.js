@@ -13,7 +13,7 @@ export function initialOfferTextChunks(text, channel) {
 }
 
 export function isMaterialPreviewConfirmation(text) {
-  return /^(s[ií]+|si+|dale|ok|okay|okey|perfecto|claro|de una|bueno|mand[aá]lo|mand[aá]melo|mandame|m[aá]ndame|pasame|pas[aá]me|envi[aá]lo|envi[aá]melo|enviame|quiero verlo|quiero ver|me interesa|me sirve)(?:[!.,;:\s]+(dale|porfa|por favor|gracias|mand[aá]lo|mand[aá]melo|pasame|envi[aá]lo|envi[aá]melo|quiero verlo|quiero ver|me interesa))*[!.,;:\s]*$/i.test(
+  return /^(s[ií]+|si+|dale|ok|okay|okey|perfecto|claro|de una|bueno|mand[aá]lo|mand[aá]melo|mandame|m[aá]ndame|pasame|pas[aá]me|envi[aá]lo|envi[aá]melo|enviame|quiero verlo|quiero ver|me interesa|me sirve)(?:[!.,;:\s]+(dale|ok|okay|okey|perfecto|claro|de una|bueno|porfa|por favor|gracias|mand[aá]lo|mand[aá]melo|pasame|envi[aá]lo|envi[aá]melo|quiero verlo|quiero ver|me interesa))*[!.,;:\s]*$/i.test(
     String(text ?? "").trim()
   );
 }

@@ -18,7 +18,8 @@ test("runtime has no 6h reminder worker", () => {
 
 test("runtime requires an affirmative reply before sending the material video", () => {
   assert.match(indexSource, /isMaterialPreviewConfirmation\(effectiveUserMessage\)/);
-  for (const text of ["sí", "sí, por favor", "sí, quiero verlo", "sí, mandámelo", "dale, gracias", "mandámelo"]) {
+  for (const text of ["sí", "sí, por favor", "sí, quiero verlo", "sí, mandámelo", "dale, gracias", "mandámelo",
+    "dale ok", "dale mandamelo ok", "sí perfecto", "mandámelo claro", "ok dale", "si bueno"]) {
     assert.equal(isMaterialPreviewConfirmation(text), true, `expected confirmation: ${text}`);
   }
   for (const text of ["no", "más adelante", "cuánto cuesta?"]) {
