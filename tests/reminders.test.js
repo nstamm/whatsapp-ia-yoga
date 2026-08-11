@@ -47,6 +47,17 @@ test("a failed initial send can release its claim for retry", () => {
   assert.equal(store.claimInitialOffer(phoneNumber), true);
 });
 
+test("a failed asynchronous greeting audio can be recovered by provider message id", () => {
+  const phoneNumber = "+541010101013";
+  store.ensureContact(phoneNumber, { conversationId: "conversation-audio-fallback" });
+  store.markGreetingAudioSent(phoneNumber, "provider-message-1");
+
+  assert.equal(store.getGreetingAudioFallback("provider-message-1")?.phone_number, phoneNumber);
+  store.markGreetingAudioFailed(phoneNumber, "provider-message-1");
+  assert.equal(store.hasGreetingAudioBeenSent(phoneNumber), false);
+  assert.equal(store.getGreetingAudioFallback("provider-message-1"), null);
+});
+
 test("a due 23h downsell can be claimed only once", () => {
   const phoneNumber = "+542222222222";
   const now = new Date("2026-07-11T12:00:00.000Z");
@@ -78,6 +89,7 @@ test("initial offer and delivery settings describe Fantasía Color PRO", () => {
   assert.match(offer, /más de 100 libros/i);
   assert.match(offer, /\$16\.999/i);
   assert.equal(store.getSetting("payment_alias"), "pagos.ofiprof");
+  assert.match(store.getSetting("payment_alias_note"), /Nicolás Stamm/);
   assert.equal(store.getSetting("product_landing_url"), "https://fantasia.ofiprof.com");
   assert.match(store.getSetting("product_landing_text"), /\{\{product_landing_url\}\}/);
   assert.match(store.getSetting("product_access_url"), /124cjyl9aEWaEkOxmX13xy0YC27xdjo5E/);
@@ -85,14 +97,27 @@ test("initial offer and delivery settings describe Fantasía Color PRO", () => {
   assert.equal(store.getSetting("product_config_version"), "fantasia-v1");
 });
 
-test("payment alias can be sent only once per product flow", () => {
+test("second-response media and payment messages track independently", () => {
   const phoneNumber = "+541010101011";
   store.ensureContact(phoneNumber, { conversationId: "conversation-alias" });
   assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), false);
+  assert.equal(store.hasPaymentAliasNoteBeenSent(phoneNumber), false);
+  assert.equal(store.hasFantasiaVideoBeenSent(phoneNumber), false);
+  assert.equal(store.claimSecondResponseBatch(phoneNumber), true);
+  assert.equal(store.claimSecondResponseBatch(phoneNumber), false);
+  store.releaseSecondResponseBatch(phoneNumber);
+  assert.equal(store.claimSecondResponseBatch(phoneNumber), true);
+  store.releaseSecondResponseBatch(phoneNumber);
   store.markPaymentAliasSent(phoneNumber);
+  store.markPaymentAliasNoteSent(phoneNumber);
+  store.markFantasiaVideoSent(phoneNumber);
   assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), true);
+  assert.equal(store.hasPaymentAliasNoteBeenSent(phoneNumber), true);
+  assert.equal(store.hasFantasiaVideoBeenSent(phoneNumber), true);
   store.clearHistory(phoneNumber);
   assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), false);
+  assert.equal(store.hasPaymentAliasNoteBeenSent(phoneNumber), false);
+  assert.equal(store.hasFantasiaVideoBeenSent(phoneNumber), false);
 });
 
 test("Instagram reminder text is split below the provider limit", () => {

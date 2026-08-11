@@ -28,7 +28,7 @@ Useful URLs:
 - Multi-channel identity handling for WhatsApp, Instagram, and Facebook.
 - OpenAI chat responses, audio transcription, name capture, and payment-proof analysis.
 - Persistent conversation history, payments, handoffs, reminders, and settings in SQLite.
-- Greeting voice-note delivery and a standalone landing message prepared for WhatsApp Open Graph previews.
+- Fantasía greeting voice-note delivery, second-response product video, and a standalone landing message prepared for WhatsApp Open Graph previews.
 - Human handoff and post-payment product delivery.
 - Meta Ads timelines, attribution, conversion reporting, and profitability metrics.
 - Visual `Flujo` panel with editable prompts/messages and media previews.

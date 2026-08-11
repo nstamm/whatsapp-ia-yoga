@@ -6,6 +6,7 @@ export const FLOW_EDITABLE_FIELDS = Object.freeze({
   product_landing_text: { label: "Mensaje de la landing", input: "textarea", maxLength: 4000, required: true },
   product_landing_url: { label: "URL de la landing", input: "url", maxLength: 2000, required: true },
   payment_alias: { label: "Alias de pago", input: "text", maxLength: 200, required: true },
+  payment_alias_note: { label: "Aclaración del alias", input: "text", maxLength: 500, required: true },
   reminder2_offer_text: { label: "Recordatorio 23h", input: "textarea", maxLength: 4000 },
   flash_offer_text: { label: "Oferta manual", input: "textarea", maxLength: 4000 },
   product_access_url: { label: "Link de acceso", input: "url", maxLength: 2000 },
@@ -17,11 +18,13 @@ export const CONVERSATION_FLOW = Object.freeze({
   nodes: [
     { id: "incoming", title: "Mensaje entrante", subtitle: "WhatsApp · Instagram · Facebook", description: "Recibe el mensaje, conserva el canal y la conversación, y separa las identidades sociales por cuenta para responder por la misma vía.", type: "trigger", x: 40, y: 280 },
     { id: "routing", title: "Clasificar mensaje", subtitle: "Saludo, consulta, archivo o pago", description: "Identifica si el contacto saluda, consulta por el producto, envía un comprobante o requiere revisión humana para decidir el siguiente paso.", type: "condition", x: 310, y: 280 },
-    { id: "greeting", title: "Saludo e información", subtitle: "Audio + Fantasía Color PRO", description: "Ante el primer mensaje, envía una sola vez el audio de bienvenida y presenta Fantasía Color PRO con el precio exclusivo por WhatsApp de $16.999.", type: "message", x: 590, y: 40, fields: ["initial_offer_text"], media: [
-      { type: "audio", label: "Audio de saludo", src: "/media/audios/saludo.mp3" },
+    { id: "greeting", title: "Saludo e información", subtitle: "Audio + Fantasía Color PRO", description: "Ante el primer mensaje, envía el audio de bienvenida y presenta Fantasía Color PRO con el precio exclusivo por WhatsApp de $16.999. Si el proveedor rechaza el audio, usa el MP3 alternativo y conserva el reintento aunque el proceso se reinicie.", type: "message", x: 590, y: 40, fields: ["initial_offer_text"], media: [
+      { type: "audio", label: "Audio de saludo Fantasía", src: "/media/audios/saludofantasia.mp3" },
     ] },
     { id: "landing", title: "Landing con muestras", subtitle: "Preview Open Graph", description: "Después de la información envía la landing en un mensaje separado para que WhatsApp genere la tarjeta con título, descripción e imagen.", type: "message", x: 890, y: 40, fields: ["product_landing_text", "product_landing_url"] },
-    { id: "alias", title: "Primera respuesta", subtitle: "Alias separado", description: "Cuando el contacto responde por primera vez después de recibir la información, envía automáticamente el alias de pago en un mensaje separado y fácil de copiar.", type: "message", x: 1190, y: 40, fields: ["payment_alias"] },
+    { id: "alias", title: "Primera respuesta", subtitle: "Video + alias + aclaración", description: "Cuando el contacto responde por primera vez después de recibir la información, envía el video del contenido, el alias en un mensaje separado y luego aclara a nombre de quién está.", type: "message", x: 1190, y: 40, fields: ["payment_alias", "payment_alias_note"], media: [
+      { type: "video", label: "Video de Fantasía Color PRO", src: "/media/contenidofantasia.mp4" },
+    ] },
     { id: "product", title: "Dudas sobre el producto", subtitle: "Respuesta IA contextual", description: "Responde preguntas sobre imprimibles, uso y contenido. Ante cualquier consulta por una serie, personaje o temática, confirma que sí está incluida.", type: "message", x: 890, y: 230, fields: ["master_prompt", "next_reply_prompt", "openai_max_tokens"] },
     { id: "downsell23h", title: "Recordatorio 23h", subtitle: "Oferta WhatsApp $16.999", description: "A las 23 horas de la información inicial, si el contacto aún no compró, recuerda una sola vez la oferta exclusiva por WhatsApp de $16.999.", type: "message", x: 1490, y: 40, fields: ["reminder2_offer_text"] },
     { id: "payment", title: "Comprobante", subtitle: "Detectar y registrar pago", description: "Reconoce adjuntos de pago, extrae los datos disponibles y registra la venta antes de habilitar la entrega del producto.", type: "condition", x: 590, y: 450 },

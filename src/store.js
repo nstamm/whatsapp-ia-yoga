@@ -28,6 +28,7 @@ function measuredGet(name, statement, params = []) {
 }
 
 const PRODUCT_CONFIG_VERSION = "fantasia-v1";
+const SECOND_BATCH_CONFIG_VERSION = "fantasia-second-batch-v1";
 const CURRENT_PRODUCT_CODE = "fantasia-color-pro";
 
 const DEFAULT_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
@@ -40,7 +41,7 @@ Oferta vigente:
 - El producto es 100% digital, descargable e imprimible sin límites.
 - También puede usarse en iPad o tablet con aplicaciones compatibles con PDF.
 - El sistema envía la información y la landing al inicio.
-- Después de la primera respuesta del contacto, el sistema manda el alias pagos.ofiprof en un mensaje separado.
+- Después de la primera respuesta del contacto, el sistema envía el video del contenido, luego el alias pagos.ofiprof en un mensaje separado y finalmente la aclaración del titular.
 
 Flujo comercial:
 - Respondé dudas según el contexto sin repetir la oferta completa que el sistema ya envió.
@@ -113,6 +114,7 @@ Cualquier cosa, escribime por acá.`;
 
 const DEFAULT_ASK_NAME_TEXT = "Cómo te llamás?";
 const DEFAULT_PAYMENT_ALIAS = "pagos.ofiprof";
+const DEFAULT_PAYMENT_ALIAS_NOTE = "Acá te paso el alias, está a nombre de mi pareja Nicolás Stamm. 🙌";
 
 const DEFAULT_FLASH_OFFER_TEXT = `Te dejo la oferta de *Fantasía Color PRO* por WhatsApp: *$16.999* ✨
 
@@ -133,6 +135,7 @@ const PRODUCT_DEFAULT_SETTINGS = {
   flash_offer_text: DEFAULT_FLASH_OFFER_TEXT,
   ask_name_text: DEFAULT_ASK_NAME_TEXT,
   payment_alias: DEFAULT_PAYMENT_ALIAS,
+  payment_alias_note: DEFAULT_PAYMENT_ALIAS_NOTE,
   product_landing_url: DEFAULT_PRODUCT_LANDING_URL,
   product_landing_text: DEFAULT_PRODUCT_LANDING_TEXT,
   product_access_url: DEFAULT_PRODUCT_ACCESS_URL,
@@ -174,6 +177,7 @@ db.exec(`
     handoff_last_message TEXT DEFAULT '',
     greeting_sent INTEGER NOT NULL DEFAULT 0,
     greeting_audio_sent INTEGER NOT NULL DEFAULT 0,
+    greeting_audio_message_id TEXT NOT NULL DEFAULT '',
     promo_scheduled_at TEXT,
     promo_sent INTEGER NOT NULL DEFAULT 0,
     promo_sent_at TEXT,
@@ -184,6 +188,9 @@ db.exec(`
     reminder2_attempted_at TEXT,
     reminder2_sent_at TEXT,
     payment_alias_sent INTEGER NOT NULL DEFAULT 0,
+    payment_alias_note_sent INTEGER NOT NULL DEFAULT 0,
+    fantasia_video_sent INTEGER NOT NULL DEFAULT 0,
+    second_batch_claimed INTEGER NOT NULL DEFAULT 0,
     last_incoming_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -308,6 +315,7 @@ const contactMigrations = [
   ["handoff_last_message", "ALTER TABLE contacts ADD COLUMN handoff_last_message TEXT DEFAULT ''"],
   ["greeting_sent", "ALTER TABLE contacts ADD COLUMN greeting_sent INTEGER NOT NULL DEFAULT 0"],
   ["greeting_audio_sent", "ALTER TABLE contacts ADD COLUMN greeting_audio_sent INTEGER NOT NULL DEFAULT 0"],
+  ["greeting_audio_message_id", "ALTER TABLE contacts ADD COLUMN greeting_audio_message_id TEXT NOT NULL DEFAULT ''"],
   ["promo_scheduled_at", "ALTER TABLE contacts ADD COLUMN promo_scheduled_at TEXT"],
   ["promo_sent", "ALTER TABLE contacts ADD COLUMN promo_sent INTEGER NOT NULL DEFAULT 0"],
   ["promo_sent_at", "ALTER TABLE contacts ADD COLUMN promo_sent_at TEXT"],
@@ -318,6 +326,9 @@ const contactMigrations = [
   ["reminder2_attempted_at", "ALTER TABLE contacts ADD COLUMN reminder2_attempted_at TEXT"],
   ["reminder2_sent_at", "ALTER TABLE contacts ADD COLUMN reminder2_sent_at TEXT"],
   ["payment_alias_sent", "ALTER TABLE contacts ADD COLUMN payment_alias_sent INTEGER NOT NULL DEFAULT 0"],
+  ["payment_alias_note_sent", "ALTER TABLE contacts ADD COLUMN payment_alias_note_sent INTEGER NOT NULL DEFAULT 0"],
+  ["fantasia_video_sent", "ALTER TABLE contacts ADD COLUMN fantasia_video_sent INTEGER NOT NULL DEFAULT 0"],
+  ["second_batch_claimed", "ALTER TABLE contacts ADD COLUMN second_batch_claimed INTEGER NOT NULL DEFAULT 0"],
   ["last_incoming_at", "ALTER TABLE contacts ADD COLUMN last_incoming_at TEXT"],
   ["name", "ALTER TABLE contacts ADD COLUMN name TEXT DEFAULT ''"],
   ["name_asked", "ALTER TABLE contacts ADD COLUMN name_asked INTEGER NOT NULL DEFAULT 0"],
@@ -413,6 +424,29 @@ for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run(key, value);
 }
 
+const storedSecondBatchVersion = db.prepare("SELECT value FROM settings WHERE key = 'second_batch_config_version'").get()?.value;
+if (storedSecondBatchVersion !== SECOND_BATCH_CONFIG_VERSION) {
+  db.prepare(
+    `UPDATE settings
+     SET value = replace(
+       value,
+       '- Después de la primera respuesta del contacto, el sistema manda el alias pagos.ofiprof en un mensaje separado.',
+       '- Después de la primera respuesta del contacto, el sistema envía el video del contenido, luego el alias pagos.ofiprof en un mensaje separado y finalmente la aclaración del titular.'
+     )
+     WHERE key = 'master_prompt'`
+  ).run();
+  db.prepare(
+    `UPDATE contacts
+     SET fantasia_video_sent = 1,
+         payment_alias_note_sent = 1
+     WHERE payment_alias_sent = 1`
+  ).run();
+  db.prepare(
+    "INSERT INTO settings (key, value) VALUES ('second_batch_config_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+  ).run(SECOND_BATCH_CONFIG_VERSION);
+}
+db.prepare("UPDATE contacts SET second_batch_claimed = 0 WHERE second_batch_claimed != 0").run();
+
 const storedProductVersion = db.prepare("SELECT value FROM settings WHERE key = 'product_config_version'").get()?.value;
 if (storedProductVersion !== PRODUCT_CONFIG_VERSION) {
   db.exec("BEGIN IMMEDIATE");
@@ -430,8 +464,9 @@ if (storedProductVersion !== PRODUCT_CONFIG_VERSION) {
            paid_at = NULL,
            product_link_sent = 0,
            product_link_sent_at = NULL,
-           greeting_sent = 0,
-           greeting_audio_sent = 0,
+            greeting_sent = 0,
+            greeting_audio_sent = 0,
+            greeting_audio_message_id = '',
            promo_scheduled_at = NULL,
            promo_sent = 0,
            promo_sent_at = NULL,
@@ -441,7 +476,10 @@ if (storedProductVersion !== PRODUCT_CONFIG_VERSION) {
            reminder2_scheduled_at = NULL,
            reminder2_attempted_at = NULL,
            reminder2_sent_at = NULL,
-           payment_alias_sent = 0`
+           payment_alias_sent = 0,
+           payment_alias_note_sent = 0,
+           fantasia_video_sent = 0,
+           second_batch_claimed = 0`
     ).run();
     db.exec("COMMIT");
   } catch (error) {
@@ -901,8 +939,12 @@ export function clearHistory(phoneNumber) {
          handoff_reason = '',
          handoff_last_message = '',
          greeting_sent = 0,
-           greeting_audio_sent = 0,
+          greeting_audio_sent = 0,
+          greeting_audio_message_id = '',
            payment_alias_sent = 0,
+           payment_alias_note_sent = 0,
+           fantasia_video_sent = 0,
+           second_batch_claimed = 0,
           name = '',
           name_asked = 0,
           promo_scheduled_at = NULL,
@@ -935,12 +977,29 @@ export function hasGreetingBeenSent(phoneNumber) {
   return Boolean(getContact(phoneNumber).greeting_sent);
 }
 
-export function markGreetingAudioSent(phoneNumber) {
+export function markGreetingAudioSent(phoneNumber, messageId = "") {
   ensureContact(phoneNumber);
-  db.prepare("UPDATE contacts SET greeting_audio_sent = 1, updated_at = ? WHERE phone_number = ?").run(
+  db.prepare("UPDATE contacts SET greeting_audio_sent = 1, greeting_audio_message_id = ?, updated_at = ? WHERE phone_number = ?").run(
+    String(messageId ?? ""),
     nowIso(),
     phoneNumber
   );
+}
+
+export function getGreetingAudioFallback(messageId) {
+  const value = String(messageId ?? "").trim();
+  if (!value) return null;
+  return db.prepare("SELECT * FROM contacts WHERE greeting_audio_message_id = ?").get(value) ?? null;
+}
+
+export function markGreetingAudioFailed(phoneNumber, messageId = "") {
+  ensureContact(phoneNumber);
+  const value = String(messageId ?? "").trim();
+  db.prepare(
+    `UPDATE contacts
+     SET greeting_audio_sent = 0, greeting_audio_message_id = '', updated_at = ?
+     WHERE phone_number = ? AND (? = '' OR greeting_audio_message_id = ?)`
+  ).run(nowIso(), phoneNumber, value, value);
 }
 
 export function hasGreetingAudioBeenSent(phoneNumber) {
@@ -957,6 +1016,46 @@ export function markPaymentAliasSent(phoneNumber) {
 
 export function hasPaymentAliasBeenSent(phoneNumber) {
   return Boolean(getContact(phoneNumber).payment_alias_sent);
+}
+
+export function markPaymentAliasNoteSent(phoneNumber) {
+  ensureContact(phoneNumber);
+  db.prepare("UPDATE contacts SET payment_alias_note_sent = 1, updated_at = ? WHERE phone_number = ?").run(
+    nowIso(),
+    phoneNumber
+  );
+}
+
+export function hasPaymentAliasNoteBeenSent(phoneNumber) {
+  return Boolean(getContact(phoneNumber).payment_alias_note_sent);
+}
+
+export function markFantasiaVideoSent(phoneNumber) {
+  ensureContact(phoneNumber);
+  db.prepare("UPDATE contacts SET fantasia_video_sent = 1, updated_at = ? WHERE phone_number = ?").run(
+    nowIso(),
+    phoneNumber
+  );
+}
+
+export function hasFantasiaVideoBeenSent(phoneNumber) {
+  return Boolean(getContact(phoneNumber).fantasia_video_sent);
+}
+
+export function claimSecondResponseBatch(phoneNumber) {
+  ensureContact(phoneNumber);
+  const result = db.prepare(
+    "UPDATE contacts SET second_batch_claimed = 1, updated_at = ? WHERE phone_number = ? AND second_batch_claimed = 0"
+  ).run(nowIso(), phoneNumber);
+  return result.changes === 1;
+}
+
+export function releaseSecondResponseBatch(phoneNumber) {
+  ensureContact(phoneNumber);
+  db.prepare("UPDATE contacts SET second_batch_claimed = 0, updated_at = ? WHERE phone_number = ?").run(
+    nowIso(),
+    phoneNumber
+  );
 }
 
 export function saveContactName(phoneNumber, name) {

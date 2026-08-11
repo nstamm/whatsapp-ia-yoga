@@ -49,13 +49,24 @@ test("incoming flow documents account-scoped social identities", () => {
   assert.match(incoming.description, /identidades sociales por cuenta/i);
 });
 
-test("flow exposes only the greeting audio", () => {
+test("flow exposes the Fantasía greeting audio and second-response video", () => {
   const flow = buildConversationFlow();
   const greeting = flow.nodes.find((item) => item.id === "greeting");
-  assert.deepEqual(greeting.media.map((item) => item.src), ["/media/audios/saludo.mp3"]);
+  const alias = flow.nodes.find((item) => item.id === "alias");
+  assert.deepEqual(greeting.media.map((item) => item.src), ["/media/audios/saludofantasia.mp3"]);
+  assert.deepEqual(alias.media.map((item) => item.src), ["/media/contenidofantasia.mp4"]);
 
   const allMedia = flow.nodes.flatMap((node) => node.media ?? []);
-  assert.deepEqual(allMedia.map((item) => item.src), ["/media/audios/saludo.mp3"]);
+  assert.deepEqual(allMedia.map((item) => item.src), [
+    "/media/audios/saludofantasia.mp3",
+    "/media/contenidofantasia.mp4",
+  ]);
+});
+
+test("flow documents durable greeting audio fallback", () => {
+  const greeting = CONVERSATION_FLOW.nodes.find((node) => node.id === "greeting");
+  assert.match(greeting.description, /MP3 alternativo/);
+  assert.match(greeting.description, /reinicie/);
 });
 
 test("flow exposes current setting values on editable nodes", () => {

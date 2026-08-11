@@ -41,6 +41,8 @@ import {
   releaseInitialOfferClaim,
   hasGreetingBeenSent,
   markGreetingAudioSent,
+  getGreetingAudioFallback,
+  markGreetingAudioFailed,
   hasGreetingAudioBeenSent,
   markContactPaid,
   markProductLinkSent,
@@ -77,6 +79,12 @@ import {
   purgeContactHistory,
   markPaymentAliasSent,
   hasPaymentAliasBeenSent,
+  markPaymentAliasNoteSent,
+  hasPaymentAliasNoteBeenSent,
+  markFantasiaVideoSent,
+  hasFantasiaVideoBeenSent,
+  claimSecondResponseBatch,
+  releaseSecondResponseBatch,
   getAdSpend,
   getMetaAdsDailyMetrics,
   deleteMetaAdsDailyMetrics,
@@ -97,10 +105,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, "..");
 const AUDIO_DIR = path.join(ROOT_DIR, "audios");
-const GREETING_AUDIO_PATH = path.join(ROOT_DIR, "saludo.mpeg");
-const GREETING_VOICE_PATH = path.join(ROOT_DIR, "saludo.ogg");
+const FANTASIA_VIDEO_PATH = path.join(ROOT_DIR, "contenidofantasia-whatsapp.mp4");
 const FLOW_AUDIOS = {
-  greeting: { voiceFile: "saludo.ogg", audioFile: "saludo.mp3", label: "audio saludo" },
+  greeting: { voiceFile: "saludofantasia.ogg", audioFile: "saludofantasia.mp3", label: "audio saludo Fantasía" },
 };
 const pendingAudioFallbacks = new Map();
 
@@ -548,12 +555,40 @@ function requireSensitiveAdmin(req, res, next) {
 }
 
 async function sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, options = {}) {
-  if (hasGreetingAudioBeenSent(phoneNumber)) return;
+  if (hasGreetingAudioBeenSent(phoneNumber)) return true;
 
   const sent = await sendFlowAudio(req, conversationId, phoneNumber, "greeting", isLocalTest, options);
   if (sent) {
     addMessage(phoneNumber, "assistant", "[audio saludo]", { conversationId });
-    markGreetingAudioSent(phoneNumber);
+    markGreetingAudioSent(phoneNumber, typeof sent === "string" ? sent : "");
+  }
+  return sent;
+}
+
+async function sendFantasiaVideo(req, conversationId, phoneNumber, isLocalTest, options = {}) {
+  const videoUrl = `${publicBaseUrl(req)}/media/contenidofantasia.mp4`;
+  if (isLocalTest) {
+    console.log(`🧪 Local test Fantasía video: ${videoUrl}`);
+    return true;
+  }
+  if (!isPublicHttpsUrl(videoUrl)) {
+    console.warn(`⚠️ Fantasía video skipped. URL must be public HTTPS: ${videoUrl}`);
+    return false;
+  }
+
+  try {
+    try {
+      await sendTypingIndicator(conversationId, zernioOptionsFor(options));
+      await sleep(900);
+    } catch (typingErr) {
+      console.warn(`⚠️ Typing indicator failed before Fantasía video for ${phoneNumber}:`, typingErr.message);
+    }
+    await sendWhatsAppMedia(conversationId, videoUrl, "video", zernioOptionsFor(options));
+    console.log(`🎬 Fantasía video sent to ${phoneNumber}`);
+    return true;
+  } catch (err) {
+    console.warn(`⚠️ Fantasía video failed for ${phoneNumber}:`, err.message);
+    return false;
   }
 }
 
@@ -626,7 +661,7 @@ async function sendFlowAudio(req, conversationId, phoneNumber, audioKey, isLocal
       });
     }
 
-    return true;
+    return acceptedMessageId ? String(acceptedMessageId) : true;
   } catch (err) {
     console.warn(`⚠️ ${audio.label} failed for ${phoneNumber}:`, err.message);
     return false;
@@ -3894,6 +3929,7 @@ function renderAdminPage(req, context = {}) {
               <label class="wide">Mensaje de la landing<textarea name="product_landing_text">${escapeHtml(settings.product_landing_text ?? "")}</textarea></label>
               <label class="wide">URL de la landing<input name="product_landing_url" value="${escapeHtml(settings.product_landing_url ?? "")}"></label>
               <label class="wide">Alias de pago<input name="payment_alias" value="${escapeHtml(settings.payment_alias ?? "")}"></label>
+              <label class="wide">Aclaración del alias<input name="payment_alias_note" value="${escapeHtml(settings.payment_alias_note ?? "")}"></label>
               <label class="wide">Recordatorio 23h<textarea name="reminder2_offer_text">${escapeHtml(settings.reminder2_offer_text ?? "")}</textarea></label>
               <label class="wide">Oferta manual<textarea name="flash_offer_text">${escapeHtml(settings.flash_offer_text ?? "")}</textarea></label>
               <label class="wide">Link de acceso al producto<input name="product_access_url" value="${escapeHtml(settings.product_access_url)}"></label>
@@ -4109,21 +4145,6 @@ app.get("/webhook", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-app.get("/media/saludo.mpeg", (_, res) => {
-  res.type("audio/mpeg");
-  res.sendFile(GREETING_AUDIO_PATH);
-});
-
-app.get("/media/saludo.mp3", (_, res) => {
-  res.type("audio/mpeg");
-  res.sendFile(GREETING_AUDIO_PATH);
-});
-
-app.get("/media/saludo.ogg", (_, res) => {
-  res.type("audio/ogg");
-  res.sendFile(GREETING_VOICE_PATH);
-});
-
 app.get("/media/audios/:file", (req, res) => {
   const file = String(req.params.file ?? "");
   const allowed = new Set(Object.values(FLOW_AUDIOS).flatMap((audio) => [audio.voiceFile, audio.audioFile]));
@@ -4132,6 +4153,11 @@ app.get("/media/audios/:file", (req, res) => {
 
   res.type(file.endsWith(".mp3") ? "audio/mpeg" : "audio/ogg");
   res.sendFile(path.join(AUDIO_DIR, file));
+});
+
+app.get("/media/contenidofantasia.mp4", (_, res) => {
+  res.type("video/mp4");
+  res.sendFile(FANTASIA_VIDEO_PATH);
 });
 
 // ─── Admin handoff panel ──────────────────────────────────────────────────────
@@ -4466,6 +4492,7 @@ app.post("/admin/settings", requireAdmin, (req, res) => {
     product_landing_text: String(req.body.product_landing_text ?? "").trim() || getSetting("product_landing_text"),
     product_landing_url: String(req.body.product_landing_url ?? "").trim() || getSetting("product_landing_url"),
     payment_alias: String(req.body.payment_alias ?? "").trim() || getSetting("payment_alias"),
+    payment_alias_note: String(req.body.payment_alias_note ?? "").trim() || getSetting("payment_alias_note"),
     reminder2_offer_text: req.body.reminder2_offer_text ?? "",
     ask_name_text: req.body.ask_name_text ?? "",
     flash_offer_text: req.body.flash_offer_text ?? "",
@@ -4543,6 +4570,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
   };
 
   let initialOfferClaimed = false;
+  let secondBatchClaimed = false;
   try {
     if (userMessage.trim() === "/clear") {
       clearHistory(phoneNumber);
@@ -4662,7 +4690,8 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
         console.log(`⏰ 23h reminder scheduled for ${phoneNumber}: ${scheduledAt}`);
       }
 
-      await sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, identity);
+      const greetingSent = await sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, identity);
+      if (!greetingSent) throw new Error("Fantasía greeting audio could not be sent");
       await sleep(700);
 
       const offerText = getSetting("initial_offer_text", "").trim();
@@ -4684,14 +4713,52 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
       return;
     }
 
-    if (!contact.paid && !hasPaymentAliasBeenSent(phoneNumber)) {
-      addMessage(phoneNumber, "user", messageForAI, { conversationId });
-      const paymentAlias = getSetting("payment_alias", "").trim();
-      if (!paymentAlias) throw new Error("payment_alias is empty");
-      addMessage(phoneNumber, "assistant", paymentAlias, { conversationId });
-      await reply(paymentAlias);
-      markPaymentAliasSent(phoneNumber);
-      return;
+    if (!contact.paid && hasGreetingBeenSent(phoneNumber) && !hasGreetingAudioBeenSent(phoneNumber)) {
+      const greetingSent = await sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, identity);
+      if (!greetingSent) throw new Error("Fantasía greeting audio retry could not be sent");
+      await sleep(700);
+    }
+
+    const secondBatchPending =
+      !hasFantasiaVideoBeenSent(phoneNumber) ||
+      !hasPaymentAliasBeenSent(phoneNumber) ||
+      !hasPaymentAliasNoteBeenSent(phoneNumber);
+
+    if (!contact.paid && secondBatchPending) {
+      if (!claimSecondResponseBatch(phoneNumber)) {
+        console.log(`⏭️ Second-response batch already claimed for ${phoneNumber}`);
+      } else {
+        secondBatchClaimed = true;
+        addMessage(phoneNumber, "user", messageForAI, { conversationId });
+
+        if (!hasFantasiaVideoBeenSent(phoneNumber)) {
+          const videoSent = await sendFantasiaVideo(req, conversationId, phoneNumber, isLocalTest, identity);
+          if (!videoSent) throw new Error("Fantasía video could not be sent");
+          addMessage(phoneNumber, "assistant", "[video Fantasía Color PRO]", { conversationId });
+          markFantasiaVideoSent(phoneNumber);
+        }
+
+        if (!hasPaymentAliasBeenSent(phoneNumber)) {
+          const paymentAlias = getSetting("payment_alias", "").trim();
+          if (!paymentAlias) throw new Error("payment_alias is empty");
+          await sleep(900);
+          await reply(paymentAlias);
+          addMessage(phoneNumber, "assistant", paymentAlias, { conversationId });
+          markPaymentAliasSent(phoneNumber);
+        }
+
+        if (!hasPaymentAliasNoteBeenSent(phoneNumber)) {
+          const aliasNote = getSetting("payment_alias_note", "").trim();
+          if (!aliasNote) throw new Error("payment_alias_note is empty");
+          await sleep(900);
+          await reply(aliasNote);
+          addMessage(phoneNumber, "assistant", aliasNote, { conversationId });
+          markPaymentAliasNoteSent(phoneNumber);
+        }
+        releaseSecondResponseBatch(phoneNumber);
+        secondBatchClaimed = false;
+        return;
+      }
     }
 
     const isPriceInquiry = looksLikePriceInquiry(messageForAI);
@@ -4708,6 +4775,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
     console.log(`🤖 [${phoneNumber}] ${aiReply.slice(0, 80)}...`);
   } catch (err) {
     if (initialOfferClaimed) releaseInitialOfferClaim(phoneNumber);
+    if (secondBatchClaimed) releaseSecondResponseBatch(phoneNumber);
     console.error(`❌ Error handling message from ${phoneNumber}:`, err.message);
     try {
       await reply("Perdón, tuve un problema para responder. Probá escribirme de nuevo en un momento 🙏");
@@ -4792,11 +4860,18 @@ app.post("/webhook", async (req, res) => {
       })
     );
 
-    const fallback = failedMessageId ? pendingAudioFallbacks.get(failedMessageId) : null;
+    const persistedFallback = failedMessageId ? getGreetingAudioFallback(failedMessageId) : null;
+    const fallback = (failedMessageId ? pendingAudioFallbacks.get(failedMessageId) : null) ?? (persistedFallback ? {
+      req,
+      conversationId: persistedFallback.conversation_id,
+      phoneNumber: persistedFallback.phone_number,
+      audioKey: "greeting",
+      options: persistedFallback,
+    } : null);
     if (fallback) {
       pendingAudioFallbacks.delete(failedMessageId);
       try {
-        await sendFlowAudioFallback(
+        const fallbackSent = await sendFlowAudioFallback(
           fallback.req,
           fallback.conversationId,
           fallback.phoneNumber,
@@ -4805,7 +4880,10 @@ app.post("/webhook", async (req, res) => {
           fallback.options,
           `async message.failed ${failedMessageId}`
         );
+        if (!fallbackSent) throw new Error("Fallback media could not be sent");
+        markGreetingAudioSent(fallback.phoneNumber);
       } catch (fallbackErr) {
+        markGreetingAudioFailed(fallback.phoneNumber, failedMessageId);
         console.error(`❌ Audio fallback failed after message.failed ${failedMessageId}:`, fallbackErr.message);
       }
     }
