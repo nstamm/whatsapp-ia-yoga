@@ -79,6 +79,7 @@ test("flow waits for one response without requiring confirmation words", () => {
 
 test("flow documents durable greeting audio fallback", () => {
   const greeting = CONVERSATION_FLOW.nodes.find((node) => node.id === "greeting");
+  assert.match(greeting.description, /lista visual de beneficios/);
   assert.match(greeting.description, /MP3 alternativo/);
   assert.match(greeting.description, /reinicie/);
 });

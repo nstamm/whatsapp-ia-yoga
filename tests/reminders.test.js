@@ -88,6 +88,15 @@ test("initial offer and delivery settings describe Fantasía Color PRO", () => {
   assert.match(offer, /Fantasía Color PRO/i);
   assert.match(offer, /más de 100 libros/i);
   assert.match(offer, /\$16\.999/i);
+  assert.match(offer, /🎨 Más de 100 libros para colorear/);
+  assert.match(offer, /💾 Más de 40 GB y 11\.700 páginas/);
+  assert.match(offer, /🖨️ Archivos de alta calidad, listos para imprimir/);
+  assert.match(offer, /📱 Uso en iPad o tablet/);
+  assert.match(offer, /✂️ Papercraft, rutinas visuales y cuadernillos didácticos/);
+  assert.match(offer, /🎲 Más de 300 juegos imprimibles/);
+  assert.match(offer, /🧸 Todos los personajes favoritos de la infancia/);
+  assert.match(offer, /🟢 Por WhatsApp te queda en un único pago de \*\$16\.999\*/);
+  assert.doesNotMatch(offer, /Actividades bíblicas|✅|Actualizaciones y libros nuevos/);
   assert.equal(store.getSetting("payment_alias"), "pagos.ofiprof");
   assert.match(store.getSetting("payment_alias_note"), /Nicolás Stamm/);
   assert.match(store.getSetting("payment_instructions_text"), /enviás el comprobante/);

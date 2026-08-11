@@ -126,3 +126,41 @@ test("second batch v2 updates the prior default landing and alias copy", async (
   assert.equal(migratedStore.getSetting("payment_alias_note"), "Acá te paso el alias de mi pareja Nicolás Stamm. 🙌");
   assert.match(migratedStore.getSetting("payment_instructions_text"), /te paso el link de descarga/);
 });
+
+test("offer copy v2 migrates known lines while preserving surrounding custom text", async () => {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-offer-copy-"));
+  process.env.CRM_DATA_DIR = dataDir;
+  await import(`../src/store.js?offer-copy-setup=${Date.now()}`);
+
+  const previousOffer = `Texto personalizado antes
+✅ Más de 100 libros para colorear
+✅ Más de 100 libros para colorear
+✅ Más de 40 GB y 11.700 páginas
+✅ Archivos de alta calidad, listos para imprimir
+✅ Uso en iPad o tablet
+✅ Papercraft, rutinas visuales y cuadernillos didácticos
+✅ Más de 300 juegos imprimibles
+✅ Actividades bíblicas para niños
+✅ Actualizaciones y libros nuevos
+Por WhatsApp te queda en un único pago de *$16.999* ✨
+Texto personalizado después`.replaceAll("\n", "\r\n");
+  const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
+  db.prepare("UPDATE settings SET value = 'fantasia-offer-copy-v1' WHERE key = 'offer_copy_version'").run();
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'initial_offer_text'").run(previousOffer);
+  db.close();
+
+  const migratedStore = await import(`../src/store.js?offer-copy-run=${Date.now()}`);
+  const offer = migratedStore.getSetting("initial_offer_text");
+  assert.match(offer, /^Texto personalizado antes/);
+  assert.match(offer, /🧸 Todos los personajes favoritos de la infancia/);
+  assert.match(offer, /🟢 Por WhatsApp/);
+  assert.match(offer, /Texto personalizado después$/);
+  assert.doesNotMatch(offer, /Actividades bíblicas|✅|Actualizaciones y libros nuevos/);
+  assert.equal(migratedStore.getSetting("offer_copy_version"), "fantasia-offer-copy-v2");
+
+  const retryDb = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
+  retryDb.prepare("UPDATE settings SET value = 'fantasia-offer-copy-v1' WHERE key = 'offer_copy_version'").run();
+  retryDb.close();
+  const retriedStore = await import(`../src/store.js?offer-copy-retry=${Date.now()}`);
+  assert.equal(retriedStore.getSetting("initial_offer_text"), offer);
+});

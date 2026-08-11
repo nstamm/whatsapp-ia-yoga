@@ -29,6 +29,7 @@ function measuredGet(name, statement, params = []) {
 
 const PRODUCT_CONFIG_VERSION = "fantasia-v1";
 const SECOND_BATCH_CONFIG_VERSION = "fantasia-second-batch-v2";
+const OFFER_COPY_VERSION = "fantasia-offer-copy-v2";
 const CURRENT_PRODUCT_CODE = "fantasia-color-pro";
 
 const DEFAULT_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
@@ -78,18 +79,17 @@ const DEFAULT_INITIAL_OFFER_TEXT = `Te cuento bien qué incluye la oferta:
 
 Incluye:
 
-✅ Más de 100 libros para colorear
-✅ Más de 40 GB y 11.700 páginas
-✅ Archivos de alta calidad, listos para imprimir
-✅ Uso en iPad o tablet
-✅ Papercraft, rutinas visuales y cuadernillos didácticos
-✅ Más de 300 juegos imprimibles
-✅ Actividades bíblicas para niños
-✅ Actualizaciones y libros nuevos
+🎨 Más de 100 libros para colorear
+💾 Más de 40 GB y 11.700 páginas
+🖨️ Archivos de alta calidad, listos para imprimir
+📱 Uso en iPad o tablet
+✂️ Papercraft, rutinas visuales y cuadernillos didácticos
+🎲 Más de 300 juegos imprimibles
+🧸 Todos los personajes favoritos de la infancia
 
 Podés imprimir tus páginas favoritas todas las veces que quieras.
 
-Por WhatsApp te queda en un único pago de *$16.999* ✨`;
+🟢 Por WhatsApp te queda en un único pago de *$16.999*`;
 
 const DEFAULT_PRODUCT_LANDING_URL = "https://fantasia.ofiprof.com";
 const DEFAULT_PRODUCT_LANDING_TEXT = `Si querés ver más detalles y algunas muestras, podés mirar acá:
@@ -429,6 +429,33 @@ db.exec("COMMIT");
 
 for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run(key, value);
+}
+
+const storedOfferCopyVersion = db.prepare("SELECT value FROM settings WHERE key = 'offer_copy_version'").get()?.value;
+if (storedOfferCopyVersion !== OFFER_COPY_VERSION) {
+  const currentOffer = db.prepare("SELECT value FROM settings WHERE key = 'initial_offer_text'").get()?.value ?? "";
+  const lineReplacements = [
+    ["✅ Más de 100 libros para colorear", "🎨 Más de 100 libros para colorear"],
+    ["✅ Más de 40 GB y 11.700 páginas", "💾 Más de 40 GB y 11.700 páginas"],
+    ["✅ Archivos de alta calidad, listos para imprimir", "🖨️ Archivos de alta calidad, listos para imprimir"],
+    ["✅ Uso en iPad o tablet", "📱 Uso en iPad o tablet"],
+    ["✅ Papercraft, rutinas visuales y cuadernillos didácticos", "✂️ Papercraft, rutinas visuales y cuadernillos didácticos"],
+    ["✅ Más de 300 juegos imprimibles", "🎲 Más de 300 juegos imprimibles"],
+    ["✅ Actualizaciones y libros nuevos", "🧸 Todos los personajes favoritos de la infancia"],
+  ];
+  const migratedOffer = lineReplacements.reduce(
+    (text, [previousLine, nextLine]) => text.replaceAll(previousLine, nextLine),
+    currentOffer
+      .replace(/^✅ Actividades bíblicas para niños(?:\r?\n|$)/gm, "")
+      .replace(
+        /^Por WhatsApp te queda en un único pago de \*\$16\.999\* ✨\r?$/gm,
+        "🟢 Por WhatsApp te queda en un único pago de *$16.999*"
+      )
+  );
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'initial_offer_text'").run(migratedOffer);
+  db.prepare(
+    "INSERT INTO settings (key, value) VALUES ('offer_copy_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+  ).run(OFFER_COPY_VERSION);
 }
 
 const storedSecondBatchVersion = db.prepare("SELECT value FROM settings WHERE key = 'second_batch_config_version'").get()?.value;
