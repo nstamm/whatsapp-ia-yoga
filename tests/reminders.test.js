@@ -90,8 +90,10 @@ test("initial offer and delivery settings describe Fantasía Color PRO", () => {
   assert.match(offer, /\$16\.999/i);
   assert.equal(store.getSetting("payment_alias"), "pagos.ofiprof");
   assert.match(store.getSetting("payment_alias_note"), /Nicolás Stamm/);
+  assert.match(store.getSetting("payment_instructions_text"), /enviás el comprobante/);
   assert.equal(store.getSetting("product_landing_url"), "https://fantasia.ofiprof.com");
   assert.match(store.getSetting("product_landing_text"), /\{\{product_landing_url\}\}/);
+  assert.match(store.getSetting("product_landing_text"), /te mando un video/i);
   assert.match(store.getSetting("product_access_url"), /124cjyl9aEWaEkOxmX13xy0YC27xdjo5E/);
   assert.match(store.getSetting("master_prompt"), /respondé siempre que sí está incluido/i);
   assert.equal(store.getSetting("product_config_version"), "fantasia-v1");
@@ -102,6 +104,7 @@ test("second-response media and payment messages track independently", () => {
   store.ensureContact(phoneNumber, { conversationId: "conversation-alias" });
   assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), false);
   assert.equal(store.hasPaymentAliasNoteBeenSent(phoneNumber), false);
+  assert.equal(store.hasPaymentInstructionsBeenSent(phoneNumber), false);
   assert.equal(store.hasFantasiaVideoBeenSent(phoneNumber), false);
   assert.equal(store.claimSecondResponseBatch(phoneNumber), true);
   assert.equal(store.claimSecondResponseBatch(phoneNumber), false);
@@ -110,13 +113,16 @@ test("second-response media and payment messages track independently", () => {
   store.releaseSecondResponseBatch(phoneNumber);
   store.markPaymentAliasSent(phoneNumber);
   store.markPaymentAliasNoteSent(phoneNumber);
+  store.markPaymentInstructionsSent(phoneNumber);
   store.markFantasiaVideoSent(phoneNumber);
   assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), true);
   assert.equal(store.hasPaymentAliasNoteBeenSent(phoneNumber), true);
+  assert.equal(store.hasPaymentInstructionsBeenSent(phoneNumber), true);
   assert.equal(store.hasFantasiaVideoBeenSent(phoneNumber), true);
   store.clearHistory(phoneNumber);
   assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), false);
   assert.equal(store.hasPaymentAliasNoteBeenSent(phoneNumber), false);
+  assert.equal(store.hasPaymentInstructionsBeenSent(phoneNumber), false);
   assert.equal(store.hasFantasiaVideoBeenSent(phoneNumber), false);
 });
 

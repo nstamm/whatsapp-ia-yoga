@@ -17,7 +17,7 @@ test("runtime has no 6h reminder worker", () => {
   assert.doesNotMatch(indexSource, /processDueReminders|6h reminder|reminder_detail_text|reminder_product_description/);
 });
 
-test("runtime sends video, alias, and alias note on the first reply", () => {
+test("runtime sends video, alias owner, alias, and payment instructions after any first reply", () => {
   assert.match(indexSource, /sendFantasiaVideo/);
   assert.match(indexSource, /markFantasiaVideoSent\(phoneNumber\)/);
   assert.match(indexSource, /!hasPaymentAliasBeenSent\(phoneNumber\)/);
@@ -25,13 +25,18 @@ test("runtime sends video, alias, and alias note on the first reply", () => {
   assert.match(indexSource, /markPaymentAliasSent\(phoneNumber\)/);
   assert.match(indexSource, /getSetting\("payment_alias_note"/);
   assert.match(indexSource, /markPaymentAliasNoteSent\(phoneNumber\)/);
+  assert.match(indexSource, /getSetting\("payment_instructions_text"/);
+  assert.match(indexSource, /markPaymentInstructionsSent\(phoneNumber\)/);
   const videoIndex = indexSource.indexOf("await sendFantasiaVideo");
-  const aliasIndex = indexSource.indexOf('getSetting("payment_alias"', videoIndex);
-  const noteIndex = indexSource.indexOf('getSetting("payment_alias_note"', aliasIndex);
-  assert.ok(videoIndex < aliasIndex);
-  assert.ok(aliasIndex < noteIndex);
+  const noteIndex = indexSource.indexOf('getSetting("payment_alias_note"', videoIndex);
+  const aliasIndex = indexSource.indexOf('getSetting("payment_alias"', noteIndex);
+  const instructionsIndex = indexSource.indexOf('getSetting("payment_instructions_text"', aliasIndex);
+  assert.ok(videoIndex < noteIndex);
+  assert.ok(noteIndex < aliasIndex);
+  assert.ok(aliasIndex < instructionsIndex);
   assert.match(indexSource, /if \(!videoSent\) throw new Error/);
   assert.match(indexSource, /claimSecondResponseBatch\(phoneNumber\)/);
+  assert.doesNotMatch(indexSource, /looksLikeVideoConfirmation|shouldSendFantasiaVideo|isMaterialPreviewConfirmation/);
 });
 
 test("runtime retries the initial offer when the greeting voice note fails", () => {
@@ -46,10 +51,15 @@ test("runtime persists asynchronous greeting fallback and retries after fallback
   assert.match(indexSource, /hasGreetingBeenSent\(phoneNumber\) && !hasGreetingAudioBeenSent\(phoneNumber\)/);
 });
 
-test("a concurrent message continues to the AI path when the second batch is already claimed", () => {
-  const claimConflict = /if \(!claimSecondResponseBatch\(phoneNumber\)\) \{[\s\S]{0,180}?\}/.exec(indexSource)?.[0] ?? "";
+test("a concurrent message waits for the claimed batch and retries it after failure", () => {
+  const claimConflict = /if \(!claimSecondResponseBatch\(phoneNumber\)\) \{[\s\S]{0,420}?\n      \}/.exec(indexSource)?.[0] ?? "";
   assert.match(claimConflict, /already claimed/);
-  assert.doesNotMatch(claimConflict, /return/);
+  assert.match(claimConflict, /await pendingBatch/);
+  assert.match(claimConflict, /if \(!completed\) return processIncomingMessageImpl/);
+});
+
+test("an emoji-only response advances a pending second batch", () => {
+  assert.match(indexSource, /isEmojiOnly\(userMessage\) && !secondBatchPending/);
 });
 
 test("Fantasia media files are provider-safe", () => {

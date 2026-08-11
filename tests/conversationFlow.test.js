@@ -28,7 +28,7 @@ test("every editable flow setting is represented by exactly one node", () => {
 test("flow keeps all core runtime stages visible", () => {
   const nodeIds = new Set(CONVERSATION_FLOW.nodes.map((node) => node.id));
   const requiredStages = [
-    "incoming", "routing", "greeting", "landing", "alias", "product", "downsell23h",
+    "incoming", "routing", "greeting", "landing", "await-video-response", "alias", "product", "downsell23h",
     "payment", "attribution-recovery", "delivery", "paid", "manual", "handoff",
   ];
 
@@ -61,6 +61,20 @@ test("flow exposes the Fantasía greeting audio and second-response video", () =
     "/media/audios/saludofantasia.mp3",
     "/media/contenidofantasia.mp4",
   ]);
+});
+
+test("flow waits for one response without requiring confirmation words", () => {
+  const waitNode = CONVERSATION_FLOW.nodes.find((node) => node.id === "await-video-response");
+  assert.match(waitNode.description, /cualquier texto/i);
+  assert.match(waitNode.description, /no exige que diga ok/i);
+  assert.equal(
+    CONVERSATION_FLOW.edges.some(([source, target]) => source === "landing" && target === "await-video-response"),
+    true
+  );
+  assert.equal(
+    CONVERSATION_FLOW.edges.some(([source, target]) => source === "await-video-response" && target === "alias"),
+    true
+  );
 });
 
 test("flow documents durable greeting audio fallback", () => {

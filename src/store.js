@@ -28,7 +28,7 @@ function measuredGet(name, statement, params = []) {
 }
 
 const PRODUCT_CONFIG_VERSION = "fantasia-v1";
-const SECOND_BATCH_CONFIG_VERSION = "fantasia-second-batch-v1";
+const SECOND_BATCH_CONFIG_VERSION = "fantasia-second-batch-v2";
 const CURRENT_PRODUCT_CODE = "fantasia-color-pro";
 
 const DEFAULT_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
@@ -41,7 +41,7 @@ Oferta vigente:
 - El producto es 100% digital, descargable e imprimible sin límites.
 - También puede usarse en iPad o tablet con aplicaciones compatibles con PDF.
 - El sistema envía la información y la landing al inicio.
-- Después de la primera respuesta del contacto, el sistema envía el video del contenido, luego el alias pagos.ofiprof en un mensaje separado y finalmente la aclaración del titular.
+- Después de cualquier primera respuesta del contacto, el sistema envía el video, presenta al titular del alias, manda pagos.ofiprof solo y cierra con las instrucciones para transferir y enviar el comprobante.
 
 Flujo comercial:
 - Respondé dudas según el contexto sin repetir la oferta completa que el sistema ya envió.
@@ -93,7 +93,9 @@ Por WhatsApp te queda en un único pago de *$16.999* ✨`;
 
 const DEFAULT_PRODUCT_LANDING_URL = "https://fantasia.ofiprof.com";
 const DEFAULT_PRODUCT_LANDING_TEXT = `Si querés ver más detalles y algunas muestras, podés mirar acá:
-{{product_landing_url}}`;
+{{product_landing_url}}
+
+Si me das el ok, te mando un video para que veas el material.`;
 
 const DEFAULT_REMINDER2_OFFER_TEXT = `Hola! Te escribo por *Fantasía Color PRO* ✨
 
@@ -114,7 +116,9 @@ Cualquier cosa, escribime por acá.`;
 
 const DEFAULT_ASK_NAME_TEXT = "Cómo te llamás?";
 const DEFAULT_PAYMENT_ALIAS = "pagos.ofiprof";
-const DEFAULT_PAYMENT_ALIAS_NOTE = "Acá te paso el alias, está a nombre de mi pareja Nicolás Stamm. 🙌";
+const DEFAULT_PAYMENT_ALIAS_NOTE = "Acá te paso el alias de mi pareja Nicolás Stamm. 🙌";
+const DEFAULT_PAYMENT_INSTRUCTIONS_TEXT =
+  "Si te interesa, nos transferís, enviás el comprobante y te paso el link de descarga. Avisame, cualquier cosa acá estoy.";
 
 const DEFAULT_FLASH_OFFER_TEXT = `Te dejo la oferta de *Fantasía Color PRO* por WhatsApp: *$16.999* ✨
 
@@ -136,6 +140,7 @@ const PRODUCT_DEFAULT_SETTINGS = {
   ask_name_text: DEFAULT_ASK_NAME_TEXT,
   payment_alias: DEFAULT_PAYMENT_ALIAS,
   payment_alias_note: DEFAULT_PAYMENT_ALIAS_NOTE,
+  payment_instructions_text: DEFAULT_PAYMENT_INSTRUCTIONS_TEXT,
   product_landing_url: DEFAULT_PRODUCT_LANDING_URL,
   product_landing_text: DEFAULT_PRODUCT_LANDING_TEXT,
   product_access_url: DEFAULT_PRODUCT_ACCESS_URL,
@@ -189,6 +194,7 @@ db.exec(`
     reminder2_sent_at TEXT,
     payment_alias_sent INTEGER NOT NULL DEFAULT 0,
     payment_alias_note_sent INTEGER NOT NULL DEFAULT 0,
+    payment_instructions_sent INTEGER NOT NULL DEFAULT 0,
     fantasia_video_sent INTEGER NOT NULL DEFAULT 0,
     second_batch_claimed INTEGER NOT NULL DEFAULT 0,
     last_incoming_at TEXT,
@@ -327,6 +333,7 @@ const contactMigrations = [
   ["reminder2_sent_at", "ALTER TABLE contacts ADD COLUMN reminder2_sent_at TEXT"],
   ["payment_alias_sent", "ALTER TABLE contacts ADD COLUMN payment_alias_sent INTEGER NOT NULL DEFAULT 0"],
   ["payment_alias_note_sent", "ALTER TABLE contacts ADD COLUMN payment_alias_note_sent INTEGER NOT NULL DEFAULT 0"],
+  ["payment_instructions_sent", "ALTER TABLE contacts ADD COLUMN payment_instructions_sent INTEGER NOT NULL DEFAULT 0"],
   ["fantasia_video_sent", "ALTER TABLE contacts ADD COLUMN fantasia_video_sent INTEGER NOT NULL DEFAULT 0"],
   ["second_batch_claimed", "ALTER TABLE contacts ADD COLUMN second_batch_claimed INTEGER NOT NULL DEFAULT 0"],
   ["last_incoming_at", "ALTER TABLE contacts ADD COLUMN last_incoming_at TEXT"],
@@ -428,17 +435,36 @@ const storedSecondBatchVersion = db.prepare("SELECT value FROM settings WHERE ke
 if (storedSecondBatchVersion !== SECOND_BATCH_CONFIG_VERSION) {
   db.prepare(
     `UPDATE settings
+     SET value = ?
+     WHERE key = 'product_landing_text'
+       AND value = ?`
+  ).run(
+    DEFAULT_PRODUCT_LANDING_TEXT,
+    "Si querés ver más detalles y algunas muestras, podés mirar acá:\n{{product_landing_url}}"
+  );
+  db.prepare(
+    `UPDATE settings
+     SET value = ?
+     WHERE key = 'payment_alias_note'
+       AND value = ?`
+  ).run(
+    DEFAULT_PAYMENT_ALIAS_NOTE,
+    "Acá te paso el alias, está a nombre de mi pareja Nicolás Stamm. 🙌"
+  );
+  db.prepare(
+    `UPDATE settings
      SET value = replace(
        value,
-       '- Después de la primera respuesta del contacto, el sistema manda el alias pagos.ofiprof en un mensaje separado.',
-       '- Después de la primera respuesta del contacto, el sistema envía el video del contenido, luego el alias pagos.ofiprof en un mensaje separado y finalmente la aclaración del titular.'
+       '- Después de la primera respuesta del contacto, el sistema envía el video del contenido, luego el alias pagos.ofiprof en un mensaje separado y finalmente la aclaración del titular.',
+       '- Después de cualquier primera respuesta del contacto, el sistema envía el video, presenta al titular del alias, manda pagos.ofiprof solo y cierra con las instrucciones para transferir y enviar el comprobante.'
      )
      WHERE key = 'master_prompt'`
   ).run();
   db.prepare(
     `UPDATE contacts
      SET fantasia_video_sent = 1,
-         payment_alias_note_sent = 1
+         payment_alias_note_sent = 1,
+         payment_instructions_sent = 1
      WHERE payment_alias_sent = 1`
   ).run();
   db.prepare(
@@ -478,6 +504,7 @@ if (storedProductVersion !== PRODUCT_CONFIG_VERSION) {
            reminder2_sent_at = NULL,
            payment_alias_sent = 0,
            payment_alias_note_sent = 0,
+           payment_instructions_sent = 0,
            fantasia_video_sent = 0,
            second_batch_claimed = 0`
     ).run();
@@ -943,6 +970,7 @@ export function clearHistory(phoneNumber) {
           greeting_audio_message_id = '',
            payment_alias_sent = 0,
            payment_alias_note_sent = 0,
+           payment_instructions_sent = 0,
            fantasia_video_sent = 0,
            second_batch_claimed = 0,
           name = '',
@@ -1028,6 +1056,18 @@ export function markPaymentAliasNoteSent(phoneNumber) {
 
 export function hasPaymentAliasNoteBeenSent(phoneNumber) {
   return Boolean(getContact(phoneNumber).payment_alias_note_sent);
+}
+
+export function markPaymentInstructionsSent(phoneNumber) {
+  ensureContact(phoneNumber);
+  db.prepare("UPDATE contacts SET payment_instructions_sent = 1, updated_at = ? WHERE phone_number = ?").run(
+    nowIso(),
+    phoneNumber
+  );
+}
+
+export function hasPaymentInstructionsBeenSent(phoneNumber) {
+  return Boolean(getContact(phoneNumber).payment_instructions_sent);
 }
 
 export function markFantasiaVideoSent(phoneNumber) {

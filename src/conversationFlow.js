@@ -6,7 +6,8 @@ export const FLOW_EDITABLE_FIELDS = Object.freeze({
   product_landing_text: { label: "Mensaje de la landing", input: "textarea", maxLength: 4000, required: true },
   product_landing_url: { label: "URL de la landing", input: "url", maxLength: 2000, required: true },
   payment_alias: { label: "Alias de pago", input: "text", maxLength: 200, required: true },
-  payment_alias_note: { label: "Aclaración del alias", input: "text", maxLength: 500, required: true },
+  payment_alias_note: { label: "Presentación del titular", input: "text", maxLength: 500, required: true },
+  payment_instructions_text: { label: "Instrucciones después del alias", input: "textarea", maxLength: 1000, required: true },
   reminder2_offer_text: { label: "Recordatorio 23h", input: "textarea", maxLength: 4000 },
   flash_offer_text: { label: "Oferta manual", input: "textarea", maxLength: 4000 },
   product_access_url: { label: "Link de acceso", input: "url", maxLength: 2000 },
@@ -21,12 +22,13 @@ export const CONVERSATION_FLOW = Object.freeze({
     { id: "greeting", title: "Saludo e información", subtitle: "Audio + Fantasía Color PRO", description: "Ante el primer mensaje, envía el audio de bienvenida y presenta Fantasía Color PRO con el precio exclusivo por WhatsApp de $16.999. Si el proveedor rechaza el audio, usa el MP3 alternativo y conserva el reintento aunque el proceso se reinicie.", type: "message", x: 590, y: 40, fields: ["initial_offer_text"], media: [
       { type: "audio", label: "Audio de saludo Fantasía", src: "/media/audios/saludofantasia.mp3" },
     ] },
-    { id: "landing", title: "Landing con muestras", subtitle: "Preview Open Graph", description: "Después de la información envía la landing en un mensaje separado para que WhatsApp genere la tarjeta con título, descripción e imagen.", type: "message", x: 890, y: 40, fields: ["product_landing_text", "product_landing_url"] },
-    { id: "alias", title: "Primera respuesta", subtitle: "Video + alias + aclaración", description: "Cuando el contacto responde por primera vez después de recibir la información, envía el video del contenido, el alias en un mensaje separado y luego aclara a nombre de quién está.", type: "message", x: 1190, y: 40, fields: ["payment_alias", "payment_alias_note"], media: [
+    { id: "landing", title: "Landing con muestras", subtitle: "Link + invitación al video", description: "Después de la información envía la landing y pregunta si quiere ver el material en video.", type: "message", x: 890, y: 40, fields: ["product_landing_text", "product_landing_url"] },
+    { id: "await-video-response", title: "Esperar respuesta", subtitle: "Sin validar el contenido", description: "Espera una respuesta del contacto. Cualquier texto continúa el flujo; no exige que diga ok ni aplica una confirmación por palabras.", type: "condition", x: 1190, y: 40 },
+    { id: "alias", title: "Video y forma de pago", subtitle: "Video + titular + alias + cierre", description: "Después de la primera respuesta envía el video, presenta al titular, manda el alias solo y termina con las instrucciones para transferir y enviar el comprobante.", type: "message", x: 1490, y: 40, fields: ["payment_alias_note", "payment_alias", "payment_instructions_text"], media: [
       { type: "video", label: "Video de Fantasía Color PRO", src: "/media/contenidofantasia.mp4" },
     ] },
     { id: "product", title: "Dudas sobre el producto", subtitle: "Respuesta IA contextual", description: "Responde preguntas sobre imprimibles, uso y contenido. Ante cualquier consulta por una serie, personaje o temática, confirma que sí está incluida.", type: "message", x: 890, y: 230, fields: ["master_prompt", "next_reply_prompt", "openai_max_tokens"] },
-    { id: "downsell23h", title: "Recordatorio 23h", subtitle: "Oferta WhatsApp $16.999", description: "A las 23 horas de la información inicial, si el contacto aún no compró, recuerda una sola vez la oferta exclusiva por WhatsApp de $16.999.", type: "message", x: 1490, y: 40, fields: ["reminder2_offer_text"] },
+    { id: "downsell23h", title: "Recordatorio 23h", subtitle: "Oferta WhatsApp $16.999", description: "A las 23 horas de la información inicial, si el contacto aún no compró, recuerda una sola vez la oferta exclusiva por WhatsApp de $16.999.", type: "message", x: 1790, y: 40, fields: ["reminder2_offer_text"] },
     { id: "payment", title: "Comprobante", subtitle: "Detectar y registrar pago", description: "Reconoce adjuntos de pago, extrae los datos disponibles y registra la venta antes de habilitar la entrega del producto.", type: "condition", x: 590, y: 450 },
     { id: "attribution-recovery", title: "Recuperar origen Ads", subtitle: "Compensación post-pago", description: "Si el webhook no incluyó el origen CTWA, consulta la conversación exacta en Zernio y reintenta en segundo plano. Sólo asigna la venta cuando el ID coincide exactamente con un anuncio de Ofiprof USD.", type: "action", x: 840, y: 450 },
     { id: "delivery", title: "Entregar producto", subtitle: "Confirmación + acceso", description: "Confirma el pago y envía el mensaje de entrega con el enlace de acceso configurado.", type: "message", x: 1090, y: 450, fields: ["product_delivery_text", "product_access_url"] },
@@ -35,7 +37,7 @@ export const CONVERSATION_FLOW = Object.freeze({
     { id: "handoff", title: "Revisión humana", subtitle: "Automatización pausada", description: "Detiene la automatización para que una persona continúe la conversación desde la bandeja de revisiones.", type: "terminal", x: 590, y: 640 },
   ],
   edges: [
-    ["incoming", "routing"], ["routing", "greeting"], ["routing", "product"], ["greeting", "landing"], ["landing", "alias"], ["alias", "product"],
+    ["incoming", "routing"], ["routing", "greeting"], ["routing", "product"], ["greeting", "landing"], ["landing", "await-video-response"], ["await-video-response", "alias"], ["alias", "product"],
     ["greeting", "downsell23h"], ["routing", "payment"], ["payment", "attribution-recovery"], ["attribution-recovery", "delivery"], ["delivery", "paid"],
     ["routing", "handoff"], ["manual", "payment"],
   ],

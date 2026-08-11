@@ -29,6 +29,7 @@ test("fantasia-v1 replaces persisted product settings and resets commercial cont
          promo_sent = 1,
          payment_alias_sent = 1,
          payment_alias_note_sent = 1,
+         payment_instructions_sent = 1,
          fantasia_video_sent = 1
      WHERE phone_number = ?`
   ).run(phoneNumber);
@@ -41,6 +42,7 @@ test("fantasia-v1 replaces persisted product settings and resets commercial cont
   assert.match(migratedStore.getSetting("master_prompt"), /Fantasía Color PRO/);
   assert.equal(migratedStore.getSetting("payment_alias"), "pagos.ofiprof");
   assert.match(migratedStore.getSetting("payment_alias_note"), /Nicolás Stamm/);
+  assert.match(migratedStore.getSetting("payment_instructions_text"), /enviás el comprobante/);
   assert.equal(migratedStore.getSetting("meta_ads_destination_id"), "pixel-production");
   assert.equal(migratedStore.getSetting("openai_max_tokens"), "777");
   assert.equal(contact.paid, 0);
@@ -50,6 +52,7 @@ test("fantasia-v1 replaces persisted product settings and resets commercial cont
   assert.equal(contact.promo_sent, 0);
   assert.equal(contact.payment_alias_sent, 0);
   assert.equal(contact.payment_alias_note_sent, 0);
+  assert.equal(contact.payment_instructions_sent, 0);
   assert.equal(contact.fantasia_video_sent, 0);
   assert.equal(migratedStore.listPayments().length, 1);
 });
@@ -67,6 +70,7 @@ test("existing contacts that already received the alias are not retrofitted with
     `UPDATE contacts
      SET payment_alias_sent = 1,
          payment_alias_note_sent = 0,
+         payment_instructions_sent = 0,
          fantasia_video_sent = 0
      WHERE phone_number = ?`
   ).run(phoneNumber);
@@ -76,8 +80,9 @@ test("existing contacts that already received the alias are not retrofitted with
   const contact = migratedStore.getContact(phoneNumber);
   assert.equal(contact.payment_alias_sent, 1);
   assert.equal(contact.payment_alias_note_sent, 1);
+  assert.equal(contact.payment_instructions_sent, 1);
   assert.equal(contact.fantasia_video_sent, 1);
-  assert.equal(migratedStore.getSetting("second_batch_config_version"), "fantasia-second-batch-v1");
+  assert.equal(migratedStore.getSetting("second_batch_config_version"), "fantasia-second-batch-v2");
 });
 
 test("a direct product upgrade resets legacy alias delivery before enabling the Fantasía media batch", async () => {
@@ -97,5 +102,27 @@ test("a direct product upgrade resets legacy alias delivery before enabling the 
   const contact = migratedStore.getContact(phoneNumber);
   assert.equal(contact.payment_alias_sent, 0);
   assert.equal(contact.payment_alias_note_sent, 0);
+  assert.equal(contact.payment_instructions_sent, 0);
   assert.equal(contact.fantasia_video_sent, 0);
+});
+
+test("second batch v2 updates the prior default landing and alias copy", async () => {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-second-batch-copy-"));
+  process.env.CRM_DATA_DIR = dataDir;
+  await import(`../src/store.js?second-batch-copy-setup=${Date.now()}`);
+
+  const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
+  db.prepare("UPDATE settings SET value = 'fantasia-second-batch-v1' WHERE key = 'second_batch_config_version'").run();
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'product_landing_text'").run(
+    "Si querés ver más detalles y algunas muestras, podés mirar acá:\n{{product_landing_url}}"
+  );
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'payment_alias_note'").run(
+    "Acá te paso el alias, está a nombre de mi pareja Nicolás Stamm. 🙌"
+  );
+  db.close();
+
+  const migratedStore = await import(`../src/store.js?second-batch-copy-run=${Date.now()}`);
+  assert.match(migratedStore.getSetting("product_landing_text"), /te mando un video/i);
+  assert.equal(migratedStore.getSetting("payment_alias_note"), "Acá te paso el alias de mi pareja Nicolás Stamm. 🙌");
+  assert.match(migratedStore.getSetting("payment_instructions_text"), /te paso el link de descarga/);
 });

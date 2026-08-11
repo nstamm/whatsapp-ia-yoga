@@ -81,6 +81,8 @@ import {
   hasPaymentAliasBeenSent,
   markPaymentAliasNoteSent,
   hasPaymentAliasNoteBeenSent,
+  markPaymentInstructionsSent,
+  hasPaymentInstructionsBeenSent,
   markFantasiaVideoSent,
   hasFantasiaVideoBeenSent,
   claimSecondResponseBatch,
@@ -110,6 +112,7 @@ const FLOW_AUDIOS = {
   greeting: { voiceFile: "saludofantasia.ogg", audioFile: "saludofantasia.mp3", label: "audio saludo Fantasía" },
 };
 const pendingAudioFallbacks = new Map();
+const pendingSecondResponseBatches = new Map();
 
 const app = express();
 app.set("trust proxy", 1);
@@ -190,6 +193,7 @@ function clearContactRuntimeState() {
   for (const pending of pendingMessages.values()) clearTimeout(pending.timer);
   pendingMessages.clear();
   pendingAudioFallbacks.clear();
+  pendingSecondResponseBatches.clear();
 }
 
 function getDebounceKey(identity) {
@@ -3929,7 +3933,8 @@ function renderAdminPage(req, context = {}) {
               <label class="wide">Mensaje de la landing<textarea name="product_landing_text">${escapeHtml(settings.product_landing_text ?? "")}</textarea></label>
               <label class="wide">URL de la landing<input name="product_landing_url" value="${escapeHtml(settings.product_landing_url ?? "")}"></label>
               <label class="wide">Alias de pago<input name="payment_alias" value="${escapeHtml(settings.payment_alias ?? "")}"></label>
-              <label class="wide">Aclaración del alias<input name="payment_alias_note" value="${escapeHtml(settings.payment_alias_note ?? "")}"></label>
+              <label class="wide">Presentación del titular<input name="payment_alias_note" value="${escapeHtml(settings.payment_alias_note ?? "")}"></label>
+              <label class="wide">Instrucciones después del alias<textarea name="payment_instructions_text">${escapeHtml(settings.payment_instructions_text ?? "")}</textarea></label>
               <label class="wide">Recordatorio 23h<textarea name="reminder2_offer_text">${escapeHtml(settings.reminder2_offer_text ?? "")}</textarea></label>
               <label class="wide">Oferta manual<textarea name="flash_offer_text">${escapeHtml(settings.flash_offer_text ?? "")}</textarea></label>
               <label class="wide">Link de acceso al producto<input name="product_access_url" value="${escapeHtml(settings.product_access_url)}"></label>
@@ -4493,6 +4498,7 @@ app.post("/admin/settings", requireAdmin, (req, res) => {
     product_landing_url: String(req.body.product_landing_url ?? "").trim() || getSetting("product_landing_url"),
     payment_alias: String(req.body.payment_alias ?? "").trim() || getSetting("payment_alias"),
     payment_alias_note: String(req.body.payment_alias_note ?? "").trim() || getSetting("payment_alias_note"),
+    payment_instructions_text: String(req.body.payment_instructions_text ?? "").trim() || getSetting("payment_instructions_text"),
     reminder2_offer_text: req.body.reminder2_offer_text ?? "",
     ask_name_text: req.body.ask_name_text ?? "",
     flash_offer_text: req.body.flash_offer_text ?? "",
@@ -4571,6 +4577,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
 
   let initialOfferClaimed = false;
   let secondBatchClaimed = false;
+  let finishSecondBatch = null;
   try {
     if (userMessage.trim() === "/clear") {
       clearHistory(phoneNumber);
@@ -4587,8 +4594,15 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
     }
 
     const contact = getContact(phoneNumber, identity);
-    const history = getHistory(phoneNumber);
+    let history = getHistory(phoneNumber);
     let messageForAI = userMessage || "[archivo adjunto]";
+    const secondBatchPending =
+      !contact.paid &&
+      hasGreetingBeenSent(phoneNumber) &&
+      (!hasFantasiaVideoBeenSent(phoneNumber) ||
+        !hasPaymentAliasBeenSent(phoneNumber) ||
+        !hasPaymentAliasNoteBeenSent(phoneNumber) ||
+        !hasPaymentInstructionsBeenSent(phoneNumber));
 
     if (hasAudioAttachment(message) && !userMessage) {
       addMessage(phoneNumber, "user", "[audio recibido]", { conversationId });
@@ -4606,7 +4620,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
       return;
     }
 
-    if (isEmojiOnly(userMessage)) {
+    if (isEmojiOnly(userMessage) && !secondBatchPending) {
       console.log(`🏷️ [${phoneNumber}] Emoji-only message, ignoring.`);
       return;
     }
@@ -4719,16 +4733,26 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
       await sleep(700);
     }
 
-    const secondBatchPending =
-      !hasFantasiaVideoBeenSent(phoneNumber) ||
-      !hasPaymentAliasBeenSent(phoneNumber) ||
-      !hasPaymentAliasNoteBeenSent(phoneNumber);
-
-    if (!contact.paid && secondBatchPending) {
+    if (secondBatchPending) {
       if (!claimSecondResponseBatch(phoneNumber)) {
         console.log(`⏭️ Second-response batch already claimed for ${phoneNumber}`);
+        const pendingBatch = pendingSecondResponseBatches.get(phoneNumber);
+        if (pendingBatch) {
+          const completed = await pendingBatch;
+          if (!completed) return processIncomingMessageImpl({ req, body, isLocalTest });
+          history = getHistory(phoneNumber);
+        }
       } else {
         secondBatchClaimed = true;
+        let resolveBatch;
+        const batchPromise = new Promise((resolve) => { resolveBatch = resolve; });
+        pendingSecondResponseBatches.set(phoneNumber, batchPromise);
+        finishSecondBatch = (completed) => {
+          resolveBatch(completed);
+          if (pendingSecondResponseBatches.get(phoneNumber) === batchPromise) {
+            pendingSecondResponseBatches.delete(phoneNumber);
+          }
+        };
         addMessage(phoneNumber, "user", messageForAI, { conversationId });
 
         if (!hasFantasiaVideoBeenSent(phoneNumber)) {
@@ -4736,6 +4760,15 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
           if (!videoSent) throw new Error("Fantasía video could not be sent");
           addMessage(phoneNumber, "assistant", "[video Fantasía Color PRO]", { conversationId });
           markFantasiaVideoSent(phoneNumber);
+        }
+
+        if (!hasPaymentAliasNoteBeenSent(phoneNumber)) {
+          const aliasNote = getSetting("payment_alias_note", "").trim();
+          if (!aliasNote) throw new Error("payment_alias_note is empty");
+          await sleep(900);
+          await reply(aliasNote);
+          addMessage(phoneNumber, "assistant", aliasNote, { conversationId });
+          markPaymentAliasNoteSent(phoneNumber);
         }
 
         if (!hasPaymentAliasBeenSent(phoneNumber)) {
@@ -4747,16 +4780,18 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
           markPaymentAliasSent(phoneNumber);
         }
 
-        if (!hasPaymentAliasNoteBeenSent(phoneNumber)) {
-          const aliasNote = getSetting("payment_alias_note", "").trim();
-          if (!aliasNote) throw new Error("payment_alias_note is empty");
+        if (!hasPaymentInstructionsBeenSent(phoneNumber)) {
+          const paymentInstructions = getSetting("payment_instructions_text", "").trim();
+          if (!paymentInstructions) throw new Error("payment_instructions_text is empty");
           await sleep(900);
-          await reply(aliasNote);
-          addMessage(phoneNumber, "assistant", aliasNote, { conversationId });
-          markPaymentAliasNoteSent(phoneNumber);
+          await reply(paymentInstructions);
+          addMessage(phoneNumber, "assistant", paymentInstructions, { conversationId });
+          markPaymentInstructionsSent(phoneNumber);
         }
         releaseSecondResponseBatch(phoneNumber);
         secondBatchClaimed = false;
+        finishSecondBatch(true);
+        finishSecondBatch = null;
         return;
       }
     }
@@ -4782,6 +4817,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
     } catch (sendErr) {
       console.error(`❌ Error sending failure message to ${phoneNumber}:`, sendErr.message);
     }
+    finishSecondBatch?.(false);
   }
 }
 
