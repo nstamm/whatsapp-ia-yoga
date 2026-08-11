@@ -6,7 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 test("conversation summaries filter and paginate inside SQLite", async () => {
-  const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-admin-store-"));
+const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-admin-store-"));
   process.env.CRM_DATA_DIR = dataDir;
   const store = await import(`../src/store.js?pagination=${Date.now()}`);
   const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
@@ -17,7 +17,7 @@ test("conversation summaries filter and paginate inside SQLite", async () => {
     "INSERT INTO messages (phone_number, role, content, at) VALUES (?, 'user', ?, ?)"
   );
   const insertPayment = db.prepare(
-    "INSERT INTO payments (phone_number, product_code, product_name, amount, paid_at, created_at) VALUES (?, 'base', 'Kit Yoga Pro', 4999, ?, ?)"
+    "INSERT INTO payments (phone_number, product_code, product_name, amount, paid_at, created_at) VALUES (?, 'fantasia-color-pro', 'Fantasía Color PRO', 16999, ?, ?)"
   );
 
   db.exec("BEGIN");
@@ -27,7 +27,7 @@ test("conversation summaries filter and paginate inside SQLite", async () => {
     const paid = index % 5 === 0 ? 1 : 0;
     const channel = ["whatsapp", "instagram", "facebook"][index % 3];
     insertContact.run(phone, `Lead ${index}`, channel, paid, index % 7 === 0 ? 1 : 0, index % 11 === 0 ? 1 : 0, timestamp, timestamp);
-    insertMessage.run(phone, `consulta yoga ${index}`, timestamp);
+    insertMessage.run(phone, `consulta fantasía ${index}`, timestamp);
     if (index % 3 === 0) insertMessage.run(phone, "segunda respuesta", timestamp);
     if (paid) insertPayment.run(phone, timestamp, timestamp);
   }
@@ -48,7 +48,7 @@ test("conversation summaries filter and paginate inside SQLite", async () => {
   assert.equal(store.countConversationSummaries({ quickFilter: "interest-2" }), 40);
   assert.equal(store.countConversationSummaries({ quickFilter: "released" }), 11);
   assert.equal(store.countConversationSummaries({ search: "Lead 117" }), 1);
-  assert.equal(store.listConversationSummaries({ search: "consulta yoga 42", limit: 50 })[0].name, "Lead 42");
+  assert.equal(store.listConversationSummaries({ search: "consulta fantasía 42", limit: 50 })[0].name, "Lead 42");
   assert.equal(store.countConversationSummaries({ search: "cliente pago" }), 24);
   assert.equal(store.countConversationSummaries({ search: "Instagram" }), 40);
   assert.equal(store.countConversationSummaries({ search: "interesado" }), 40);
@@ -65,7 +65,7 @@ test("conversation summaries filter and paginate inside SQLite", async () => {
 });
 
 test("dashboard summaries prioritize the latest conversions before recent activity", async () => {
-  const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-dashboard-conversions-"));
+  const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-dashboard-conversions-"));
   process.env.CRM_DATA_DIR = dataDir;
   const store = await import(`../src/store.js?dashboard-conversions=${Date.now()}`);
   const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));

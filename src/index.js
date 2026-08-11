@@ -12,6 +12,7 @@ import {
 import { consumeInboxConversationPages, shouldProcessCtwaBackfillConversation, shouldRunCtwaBackfill } from "./ctwaBackfill.js";
 import { BUSINESS_TIME_ZONE, businessDateKey as localDateKey, parseBusinessDateKey as parseDateKey, shiftBusinessDateKey as shiftDateKey } from "./businessDate.js";
 import { buildConversationFlow, validateFlowSettings } from "./conversationFlow.js";
+import { contactHistoryCsv } from "./contactExport.js";
 import { hasCommercialPaymentContext, initialOfferTextChunks, shouldAutoProcessPaymentAttachment } from "./conversationPolicy.js";
 import { adminSectionDataNeeds, buildAdminConversationQuery, createAsyncTtlCache, isFreshTimestamp, isValidDateKey, mapWithConcurrency } from "./adminPerformance.js";
 import { DEFAULT_META_AD_ACCOUNT_NAME, hasMetaAdsActivity, metaSpendInArs, primaryMetaAdAccountId, selectPrimaryMetaAdAccount, shouldReplaceLegacyMetaAdsMetrics } from "./metaAdsPolicy.js";
@@ -37,6 +38,7 @@ import {
   addMessage,
   clearHistory,
   claimInitialOffer,
+  releaseInitialOfferClaim,
   hasGreetingBeenSent,
   markGreetingAudioSent,
   hasGreetingAudioBeenSent,
@@ -63,7 +65,7 @@ import {
   listDueReminder2s,
   claimDueReminder2,
   markReminder2Sent,
-  markProductReleased,
+  markManualOfferSent,
   saveContactCtwaAttribution,
   listCtwaAttributedConversations,
   saveContactName,
@@ -71,11 +73,10 @@ import {
   markNameAsked,
   getContactName,
   deleteContact,
-  markMaterialPreviewOffered,
-  hasMaterialPreviewBeenOffered,
-  markMaterialVideoSent,
-  hasMaterialVideoBeenSent,
-  getMaterialVideoSentAt,
+  listContactHistoryForExport,
+  purgeContactHistory,
+  markPaymentAliasSent,
+  hasPaymentAliasBeenSent,
   getAdSpend,
   getMetaAdsDailyMetrics,
   deleteMetaAdsDailyMetrics,
@@ -98,11 +99,6 @@ const ROOT_DIR = path.resolve(__dirname, "..");
 const AUDIO_DIR = path.join(ROOT_DIR, "audios");
 const GREETING_AUDIO_PATH = path.join(ROOT_DIR, "saludo.mpeg");
 const GREETING_VOICE_PATH = path.join(ROOT_DIR, "saludo.ogg");
-const PRODUCT_IMAGE_PATH = path.join(ROOT_DIR, "info.jpeg");
-const MATERIAL_VIDEO_PATH = path.join(ROOT_DIR, "videomaterial.mp4");
-const MATERIAL_VIDEO_INTRO_TEXT = "aca te mando el video, miralo tranqui y si te sirve te dejo el alias para transferir 🪴";
-const MATERIAL_PAYMENT_ALIAS_TEXT = "kit.yogapro";
-const MATERIAL_PAYMENT_NOTE_TEXT = "Te comparto el alias de mi pareja Nicolás Stamm. cualquier cosa escribime por acá";
 const FLOW_AUDIOS = {
   greeting: { voiceFile: "saludo.ogg", audioFile: "saludo.mp3", label: "audio saludo" },
 };
@@ -142,6 +138,52 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const MESSAGE_DEBOUNCE_MS = 20000;
 const pendingMessages = new Map();
+const activeContactOperations = new Set();
+const deferredWebhookEvents = [];
+let contactHistoryMaintenance = false;
+
+function trackContactOperation(operation) {
+  if (contactHistoryMaintenance) return Promise.resolve(false);
+  const promise = Promise.resolve().then(operation);
+  activeContactOperations.add(promise);
+  promise.then(
+    () => activeContactOperations.delete(promise),
+    () => activeContactOperations.delete(promise)
+  );
+  return promise;
+}
+
+async function waitForContactOperations() {
+  while (activeContactOperations.size) {
+    await Promise.allSettled([...activeContactOperations]);
+  }
+}
+
+function resumeDeferredWebhookEvents() {
+  for (const entry of deferredWebhookEvents.splice(0)) {
+    const event = entry.body?.event ?? entry.body?.type;
+    const message = entry.body?.message;
+    if (event === "conversation.started") {
+      captureConversationStarted(entry.body);
+    } else if (event === "message.received" && message?.direction === "incoming") {
+      if (shouldDebounceMessage(entry.body)) {
+        scheduleDebouncedMessage(entry);
+      } else {
+        processIncomingMessage(entry).catch((err) => {
+          console.error("❌ Deferred incoming message failed:", err.message);
+        });
+      }
+    }
+  }
+}
+
+function clearContactRuntimeState() {
+  for (const timer of ctwaRecoveryTimers.values()) clearTimeout(timer);
+  ctwaRecoveryTimers.clear();
+  for (const pending of pendingMessages.values()) clearTimeout(pending.timer);
+  pendingMessages.clear();
+  pendingAudioFallbacks.clear();
+}
 
 function getDebounceKey(identity) {
   return `${identity.channel}:${identity.contactId}`;
@@ -497,6 +539,14 @@ function requireAdmin(req, res, next) {
   </html>`);
 }
 
+function requireSensitiveAdmin(req, res, next) {
+  if (!process.env.ADMIN_TOKEN) {
+    return res.status(503).send("ADMIN_TOKEN is required for contact export and deletion.");
+  }
+  if (getAdminToken(req) !== process.env.ADMIN_TOKEN) return res.status(401).send("Unauthorized");
+  return next();
+}
+
 async function sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, options = {}) {
   if (hasGreetingAudioBeenSent(phoneNumber)) return;
 
@@ -659,7 +709,7 @@ function cleanLikelyName(text) {
   if (value.length < 2 || value.length > 50) return "";
   if (value.split(" ").length > 4) return "";
   if (/https?:|www\.|@|\$|\d{3,}|[¿?¡!]/i.test(value)) return "";
-  if (/precio|valor|cuanto|cuánto|producto|kit|yoga|compr|pago|alias|ofiprof|kit\.yogapro|comprobante|transfer|info|pasame|pasáme|mandame|mándame|contame/i.test(value)) return "";
+  if (/precio|valor|cuanto|cuánto|producto|fantas[ií]a|coloreable|compr|pago|alias|ofiprof|comprobante|transfer|info|pasame|pasáme|mandame|mándame|contame/i.test(value)) return "";
   if (!/^[a-záéíóúüñ' -]+$/i.test(value)) return "";
 
   return value
@@ -743,40 +793,6 @@ function looksLikePriceInquiry(text) {
   );
 }
 
-async function sendMaterialVideoIfApproved(req, conversationId, phoneNumber, isLocalTest, options = {}) {
-  if (hasMaterialVideoBeenSent(phoneNumber)) return false;
-
-  const videoUrl = `${publicBaseUrl(req)}/media/videomaterial.mp4`;
-
-  if (isLocalTest) {
-    console.log(`🧪 Local test material video: ${videoUrl}`);
-    markMaterialVideoSent(phoneNumber);
-    return true;
-  }
-
-  if (!isPublicHttpsUrl(videoUrl)) {
-    console.warn(`⚠️ Material video skipped. URL must be public HTTPS: ${videoUrl}`);
-    return false;
-  }
-
-  try {
-    console.log(`🎬 Sending material video to ${phoneNumber}: ${videoUrl}`);
-    try {
-      await sendTypingIndicator(conversationId, zernioOptionsFor(options));
-      await sleep(900);
-    } catch (typingErr) {
-      console.warn(`⚠️ Typing indicator failed before material video for ${phoneNumber}:`, typingErr.message);
-    }
-    await sendWhatsAppMedia(conversationId, videoUrl, "video", zernioOptionsFor(options));
-    console.log(`🎬 Material video sent to ${phoneNumber}`);
-    markMaterialVideoSent(phoneNumber);
-    return true;
-  } catch (err) {
-    console.warn(`⚠️ Material video failed for ${phoneNumber}:`, err.message);
-    return false;
-  }
-}
-
 async function sendReminderText(contact, text, options, label) {
   const chunks = reminderTextChunks(text, contact.channel);
 
@@ -797,7 +813,7 @@ async function sendReminderText(contact, text, options, label) {
   }
 }
 
-async function processDueDownsells() {
+async function processDueDownsellsImpl() {
   const due = listDueReminder2s();
 
   for (const contact of due) {
@@ -810,7 +826,7 @@ async function processDueDownsells() {
     }
 
     if (!contact.conversation_id) {
-      console.warn(`⚠️ 23h downsell skipped for ${contact.phone_number}: missing conversationId`);
+      console.warn(`⚠️ 23h reminder skipped for ${contact.phone_number}: missing conversationId`);
       continue;
     }
 
@@ -819,24 +835,33 @@ async function processDueDownsells() {
       if (!text) continue;
 
       const options = zernioOptionsFor(contact);
-      await sendReminderText(contact, text, options, "23h downsell");
+      await sendReminderText(contact, text, options, "23h reminder");
       markReminder2Sent(contact.phone_number);
-      console.log(`📣 23h downsell sent to ${contact.phone_number}`);
+      console.log(`📣 23h reminder sent to ${contact.phone_number}`);
     } catch (err) {
       if (isPermanentReminderSendError(err)) {
         markReminder2Sent(contact.phone_number);
-        console.warn(`⏭️ 23h downsell stopped for ${contact.phone_number}: ${err.message}`);
+        console.warn(`⏭️ 23h reminder stopped for ${contact.phone_number}: ${err.message}`);
         continue;
       }
 
-      console.error(`❌ Error sending 23h downsell to ${contact.phone_number}; automatic retry disabled:`, err.message);
+      console.error(`❌ Error sending 23h reminder to ${contact.phone_number}; automatic retry disabled:`, err.message);
     }
   }
+}
+
+function processDueDownsells() {
+  return trackContactOperation(processDueDownsellsImpl);
 }
 
 function buildProductDeliveryText() {
   const productAccessUrl = getSetting("product_access_url");
   return getSetting("product_delivery_text").replaceAll("{{product_access_url}}", productAccessUrl);
+}
+
+function buildProductLandingText() {
+  const landingUrl = getSetting("product_landing_url");
+  return getSetting("product_landing_text").replaceAll("{{product_landing_url}}", landingUrl);
 }
 
 function buildPaidProofDeliveryText(wasAccessAlreadySent) {
@@ -852,7 +877,7 @@ ${productAccessUrl}`;
   return buildProductDeliveryText();
 }
 
-function buildAccessReleaseText(settingKey = "followup_text") {
+function buildManualOfferText(settingKey) {
   const productAccessUrl = getSetting("product_access_url");
   return getSetting(settingKey).replaceAll("{{product_access_url}}", productAccessUrl);
 }
@@ -889,19 +914,12 @@ async function extractAndSavePaymentName(phoneNumber, userMessage, imageUrl) {
 }
 
 const PAYMENT_PRODUCTS = {
-  base: {
-    code: "base",
-    name: "Kit Yoga Pro",
-    shortName: "Base",
-    amount: 14999,
+  fantasia: {
+    code: "fantasia-color-pro",
+    name: "Fantasía Color PRO",
+    shortName: "WhatsApp",
+    amount: 16999,
     discount: 0,
-  },
-  promo: {
-    code: "promo",
-    name: "Kit Yoga Pro por hoy",
-    shortName: "Hoy",
-    amount: 4999,
-    discount: 10000,
   },
 };
 
@@ -1741,7 +1759,7 @@ function cachedAdsDashboard(req, options = {}) {
   });
 }
 
-async function backfillCtwaAttribution(options = {}) {
+async function backfillCtwaAttributionImpl(options = {}) {
   if (!process.env.ZERNIO_API_KEY) return { pages: 0, conversations: 0, attributed: 0, saved: 0, errors: [] };
 
   const targets = [];
@@ -1822,6 +1840,10 @@ async function backfillCtwaAttribution(options = {}) {
   return { pages, conversations: conversationsRead, attributed, saved, errors };
 }
 
+function backfillCtwaAttribution(options = {}) {
+  return trackContactOperation(() => backfillCtwaAttributionImpl(options));
+}
+
 function queueCtwaAttributionRecovery(phoneNumber, contact) {
   const sourceId = contact.ctwa_source_id ?? contact.ctwaSourceId;
   const conversationId = contact.conversation_id ?? contact.conversationId;
@@ -1861,10 +1883,16 @@ function queueCtwaAttributionRecovery(phoneNumber, contact) {
       ctwaRecoveryTimers.delete(phoneNumber);
       return;
     }
-    ctwaRecoveryTimers.set(phoneNumber, setTimeout(recover, delays[attempt]));
+    ctwaRecoveryTimers.set(phoneNumber, scheduleRecovery(delays[attempt]));
   };
 
-  ctwaRecoveryTimers.set(phoneNumber, setTimeout(recover, delays[attempt]));
+  const scheduleRecovery = (delay) => setTimeout(() => {
+    trackContactOperation(recover).catch((err) => {
+      console.warn(`⚠️ CTWA attribution recovery task failed for ${phoneNumber}:`, err.message);
+    });
+  }, delay);
+
+  ctwaRecoveryTimers.set(phoneNumber, scheduleRecovery(delays[attempt]));
 }
 
 function queueRecentCtwaAttributionRecovery() {
@@ -2179,6 +2207,8 @@ function adminStatusMessage(status) {
     flash_offered: "Bombazo enviado manualmente.",
     promo_send_failed: "Fallo el envio de la liberacion. Revisá la consola.",
     contact_deleted: "Conversacion eliminada.",
+    contacts_purged: "Historial de contactos eliminado.",
+    contacts_purge_failed: "No se eliminó el historial. Escribí BORRAR TODO para confirmar.",
     trigger_flow_started: "Flujo iniciado correctamente.",
     trigger_flow_no_contact: "No se encontró el contacto.",
   };
@@ -2217,7 +2247,7 @@ function nextActionFor(conversation) {
   if (conversation.paid && !conversation.productLinkSent) return { label: "Enviar acceso", tone: "danger" };
   if (conversation.paid) return { label: "Cliente completo", tone: "good" };
   if (conversation.promoSent || conversation.productLinkSent) return { label: "Esperando pago", tone: "soft" };
-  if (conversation.reminderScheduledAt) return { label: "Downsell 23h", tone: "soft" };
+  if (conversation.reminderScheduledAt) return { label: "Recordatorio 23h", tone: "soft" };
   return { label: "Bot trabajando", tone: "neutral" };
 }
 
@@ -2234,7 +2264,7 @@ function conversationSearchText(conversation, extra = []) {
     conversation.handoff ? "revision humana pausado" : "bot activo",
     conversation.productLinkSent ? "acceso enviado liberado" : "acceso pendiente",
     conversation.promoSent ? "producto liberado" : "sin liberacion",
-    conversation.reminderScheduledAt ? "downsell 23h programado" : "sin downsell",
+    conversation.reminderScheduledAt ? "recordatorio 23h programado" : "sin recordatorio",
     `${conversation.leadReplyCount ?? 0} respuestas lead interes`,
     leadInterest(conversation).label,
     ...extra,
@@ -2271,8 +2301,7 @@ function conversationFilterTokens(conversation) {
 
 function renderPaymentActions(req, phoneNumber, section, conversation) {
   const encodedPhone = encodeURIComponent(phoneNumber);
-  const baseFields = adminHiddenFields(req, { section, productCode: "base" });
-  const promoPayFields = adminHiddenFields(req, { section, productCode: "promo", amount: PAYMENT_PRODUCTS.promo.amount });
+  const paymentFields = adminHiddenFields(req, { section, productCode: "fantasia" });
   const isPaid = conversation && conversation.paid === 1;
   const promoAlreadySent = conversation && conversation.promoSent === 1;
 
@@ -2281,9 +2310,8 @@ function renderPaymentActions(req, phoneNumber, section, conversation) {
   }
 
   return `<div class="quick-actions">
-    ${!promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-flash">${adminHiddenFields(req, { section })}<button type="submit" class="bomb">Bombazo $6999</button></form>` : ""}
-    <form method="post" action="/admin/contacts/${encodedPhone}/paid">${baseFields}<button type="submit">${formatMoneyShort(PAYMENT_PRODUCTS.base.amount)}</button></form>
-    <form method="post" action="/admin/contacts/${encodedPhone}/paid">${promoPayFields}<button type="submit">${formatMoneyShort(PAYMENT_PRODUCTS.promo.amount)}</button></form>
+    ${!promoAlreadySent ? `<form method="post" action="/admin/contacts/${encodedPhone}/offer-flash">${adminHiddenFields(req, { section })}<button type="submit" class="bomb">Oferta Fantasía</button></form>` : ""}
+    <form method="post" action="/admin/contacts/${encodedPhone}/paid">${paymentFields}<button type="submit">${formatMoneyShort(PAYMENT_PRODUCTS.fantasia.amount)}</button></form>
     <form method="post" action="/admin/contacts/${encodedPhone}/trigger-flow">${adminHiddenFields(req, { section })}<button type="submit" class="secondary">Iniciar flujo</button></form>
     <form method="post" action="/admin/contacts/${encodedPhone}/delete" onsubmit="return confirm('Eliminar esta conversacion y todos sus datos? Esta accion no se puede deshacer.')">${adminHiddenFields(req, { section })}<button type="submit" class="ghost danger">Eliminar</button></form>
   </div>`;
@@ -2308,14 +2336,14 @@ function renderConversationTable(req, conversations, options = {}) {
         ? `Acceso enviado${conversation.productLinkSentAt ? ` · ${formatDateTime(conversation.productLinkSentAt)}` : ""}`
         : "Acceso pendiente";
       const promoDetail = conversation.paid
-          ? "Comprador: downsell pausado"
+          ? "Comprador: recordatorio pausado"
         : conversation.promoSent
           ? `Producto liberado${conversation.promoSentAt ? ` · ${formatDateTime(conversation.promoSentAt)}` : ""}`
           : conversation.reminderScheduledAt
-            ? `Downsell 23h · ${formatDateTime(conversation.reminderScheduledAt)}`
+            ? `Recordatorio 23h · ${formatDateTime(conversation.reminderScheduledAt)}`
             : conversation.reminderSentAt
-              ? `Downsell enviado · ${formatDateTime(conversation.reminderSentAt)}`
-              : "Sin downsell programado";
+              ? `Recordatorio enviado · ${formatDateTime(conversation.reminderSentAt)}`
+              : "Sin recordatorio programado";
       const adDetail = conversation.ctwaSourceId
         ? `Anuncio: ${conversation.ctwaHeadline || conversation.ctwaSourceId}`
         : "Sin anuncio atribuido";
@@ -2375,6 +2403,17 @@ function renderConversationSection(req, conversations, options = {}) {
     <a class="${convFilter === "pending" ? "active" : ""}" href="${filterUrl("pending")}">Pendientes</a>
   </div>`;
   const tableHtml = renderConversationTable(req, conversations, { ...options, convFilter });
+  const historyActions = `<div class="history-actions">
+    <form method="get" action="/admin/contacts.csv">
+      ${adminHiddenFields(req)}
+      <button type="submit" class="secondary">Descargar teléfonos CSV</button>
+    </form>
+    <form method="post" action="/admin/contacts/purge" onsubmit="return confirm('Esta acción elimina contactos, mensajes y pagos del historial. No se puede deshacer. ¿Continuar?')">
+      ${adminHiddenFields(req, { section: "conversations" })}
+      <label><span>Para borrar, escribí BORRAR TODO</span><input name="confirmation" required autocomplete="off" placeholder="BORRAR TODO"></label>
+      <button type="submit" class="ghost danger">Borrar todo el histórico</button>
+    </form>
+  </div>`;
   const pagination = pageCount > 1 ? `<nav class="filter-pills" aria-label="Paginacion de conversaciones">
     ${page > 1 ? `<a href="${adminSectionPath(req, "conversations", { convFilter, quickFilter, q: search, page: page - 1 })}">Anterior</a>` : ""}
     <span>Pagina ${page} de ${pageCount}</span>
@@ -2390,6 +2429,7 @@ function renderConversationSection(req, conversations, options = {}) {
       </div>
       ${filterPills}
     </div>
+    ${historyActions}
     <div class="conversation-toolbar management-toolbar">
       <form method="get" action="/admin" class="search-box">
         ${adminHiddenFields(req, { section, convFilter, quickFilter })}
@@ -2633,7 +2673,7 @@ function renderRevenueCorrectionCard(req, metrics) {
       ${adminHiddenFields(req, { section: "dashboard", date: metrics.date })}
       <strong>Corregir facturacion</strong>
       <small>Sistema: ${formatMoney(metrics.systemRevenue)} · Total actual: ${formatMoney(metrics.revenue)}</small>
-      <label>Ajuste neto<input name="amount" inputmode="numeric" value="${escapeHtml(metrics.adjustment.amount || "")}" placeholder="Ej: -4999 o 4999"></label>
+      <label>Ajuste neto<input name="amount" inputmode="numeric" value="${escapeHtml(metrics.adjustment.amount || "")}" placeholder="Ej: -16999 o 16999"></label>
       <label>Motivo<input name="note" value="${escapeHtml(metrics.adjustment.note ?? "")}" required placeholder="Ej: pago duplicado"></label>
       <label class="confirm-line"><input type="checkbox" name="confirm" value="yes" required style="width:auto"> Confirmo que corrige un error</label>
       <label>Escribir AJUSTAR<input name="phrase" autocomplete="off" placeholder="AJUSTAR" pattern="AJUSTAR" required></label>
@@ -3594,6 +3634,9 @@ function renderAdminPage(req, context = {}) {
     .muted-money { color: var(--muted); font-weight: 600; }
     .empty { border: 1px dashed var(--line); border-radius: 8px; padding: 16px; color: var(--soft); background: var(--surface); font-size: 12px; }
     .button-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+    .history-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 12px; }
+    .history-actions form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+    .history-actions label { min-width: min(280px, 100%); }
     .secondary { background: var(--accent-2); color: #fff; }
     .filter-card { display: grid; gap: 10px; }
     code { background: var(--line); padding: 2px 5px; border-radius: 4px; font-size: 11px; }
@@ -3679,7 +3722,7 @@ function renderAdminPage(req, context = {}) {
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">Of</div>
-        <div><strong>Ofiprof Admin</strong><span>Control comercial Kit Yoga Pro</span></div>
+        <div><strong>Ofiprof Admin</strong><span>Control comercial Fantasía Color PRO</span></div>
       </div>
       <nav class="nav" aria-label="Panel admin">
         <a class="${activeSection === "dashboard" ? "active" : ""}" href="${adminSectionPath(req, "dashboard")}"><span>Dashboard</span><span>${salesToday}</span></a>
@@ -3847,9 +3890,12 @@ function renderAdminPage(req, context = {}) {
               <label class="wide">Prompt maestro<textarea name="master_prompt">${escapeHtml(settings.master_prompt)}</textarea></label>
               <label class="wide">Regla de respuestas siguientes<textarea name="next_reply_prompt">${escapeHtml(settings.next_reply_prompt)}</textarea></label>
               <label class="wide">Regla para compradores<textarea name="paid_reply_prompt">${escapeHtml(settings.paid_reply_prompt)}</textarea></label>
-              <label class="wide">Oferta inicial + confirmación de video<textarea name="initial_offer_text">${escapeHtml(settings.initial_offer_text ?? "")}</textarea></label>
-              <label class="wide">Downsell 23h<textarea name="reminder2_offer_text">${escapeHtml(settings.reminder2_offer_text ?? "")}</textarea></label>
-              <label class="wide">Mensaje Bombazo $6999<textarea name="flash_offer_text">${escapeHtml(settings.flash_offer_text ?? "")}</textarea></label>
+              <label class="wide">Información inicial<textarea name="initial_offer_text">${escapeHtml(settings.initial_offer_text ?? "")}</textarea></label>
+              <label class="wide">Mensaje de la landing<textarea name="product_landing_text">${escapeHtml(settings.product_landing_text ?? "")}</textarea></label>
+              <label class="wide">URL de la landing<input name="product_landing_url" value="${escapeHtml(settings.product_landing_url ?? "")}"></label>
+              <label class="wide">Alias de pago<input name="payment_alias" value="${escapeHtml(settings.payment_alias ?? "")}"></label>
+              <label class="wide">Recordatorio 23h<textarea name="reminder2_offer_text">${escapeHtml(settings.reminder2_offer_text ?? "")}</textarea></label>
+              <label class="wide">Oferta manual<textarea name="flash_offer_text">${escapeHtml(settings.flash_offer_text ?? "")}</textarea></label>
               <label class="wide">Link de acceso al producto<input name="product_access_url" value="${escapeHtml(settings.product_access_url)}"></label>
               <label class="wide">Mensaje de entrega post-pago<textarea name="product_delivery_text">${escapeHtml(settings.product_delivery_text)}</textarea></label>
               <label class="wide">Pixel/Dataset Meta para conversiones IG/FB<input name="meta_ads_destination_id" value="${escapeHtml(settings.meta_ads_destination_id ?? "")}" placeholder="ID del Pixel o Dataset"></label>
@@ -4080,29 +4126,12 @@ app.get("/media/saludo.ogg", (_, res) => {
 
 app.get("/media/audios/:file", (req, res) => {
   const file = String(req.params.file ?? "");
-  const allowed = new Set([
-    ...Object.values(FLOW_AUDIOS).flatMap((audio) => [audio.voiceFile, audio.audioFile]),
-    "saludo.ogg",
-    "info-del-producto.ogg",
-    "antes-del-video.ogg",
-    "23horas.ogg",
-    "comprobante.ogg",
-  ]);
+  const allowed = new Set(Object.values(FLOW_AUDIOS).flatMap((audio) => [audio.voiceFile, audio.audioFile]));
 
   if (!allowed.has(file)) return res.sendStatus(404);
 
   res.type(file.endsWith(".mp3") ? "audio/mpeg" : "audio/ogg");
-  res.sendFile(file === "saludo2.ogg" ? path.join(ROOT_DIR, file) : path.join(AUDIO_DIR, file));
-});
-
-app.get("/media/info.jpeg", (_, res) => {
-  res.type("image/jpeg");
-  res.sendFile(PRODUCT_IMAGE_PATH);
-});
-
-app.get("/media/videomaterial.mp4", (_, res) => {
-  res.type("video/mp4");
-  res.sendFile(MATERIAL_VIDEO_PATH);
+  res.sendFile(path.join(AUDIO_DIR, file));
 });
 
 // ─── Admin handoff panel ──────────────────────────────────────────────────────
@@ -4242,7 +4271,7 @@ app.post("/admin/handoffs/resolve-all", requireAdmin, (req, res) => {
   res.redirect(303, adminPath(req, { status: "bot_all_resolved", section: "conversations" }));
 });
 
-async function sendManualProductRelease(req, res, settingKey, successStatus) {
+async function sendManualOffer(req, res, settingKey, successStatus) {
   const phoneNumber = req.params.phoneNumber;
   const contact = getContact(phoneNumber);
 
@@ -4250,7 +4279,7 @@ async function sendManualProductRelease(req, res, settingKey, successStatus) {
     return res.redirect(303, adminPath(req, { status: "release_no_conversation" }));
   }
 
-  const promoText = buildAccessReleaseText(settingKey);
+  const promoText = buildManualOfferText(settingKey);
   if (!promoText) {
     return res.redirect(303, adminPath(req, { status: "settings_saved", section: "settings" }));
   }
@@ -4258,22 +4287,26 @@ async function sendManualProductRelease(req, res, settingKey, successStatus) {
   try {
     await sendWhatsAppMessage(contact.conversation_id, promoText, zernioOptionsFor(contact, { allowHumanAgentTag: true }));
     addMessage(phoneNumber, "assistant", promoText, { conversationId: contact.conversation_id });
-    markProductLinkSent(phoneNumber);
-    markProductReleased(phoneNumber);
+    markManualOfferSent(phoneNumber);
     res.redirect(303, adminPath(req, { status: successStatus }));
   } catch (err) {
-    console.error(`❌ Error sending product access release to ${phoneNumber}:`, err.message);
+    console.error(`❌ Error sending manual offer to ${phoneNumber}:`, err.message);
     res.redirect(303, adminPath(req, { status: "promo_send_failed" }));
   }
 }
 
+async function runAdminContactOperation(res, operation) {
+  const result = await trackContactOperation(operation);
+  if (result === false && !res.headersSent) res.status(503).send("Contact history maintenance in progress.");
+}
+
 app.post("/admin/contacts/:phoneNumber/offer-flash", requireAdmin, async (req, res) => {
-  await sendManualProductRelease(req, res, "flash_offer_text", "flash_offered");
+  await runAdminContactOperation(res, () => sendManualOffer(req, res, "flash_offer_text", "flash_offered"));
 });
 
-app.post("/admin/contacts/:phoneNumber/paid", requireAdmin, async (req, res) => {
+async function processManualPayment(req, res) {
   const phoneNumber = req.params.phoneNumber;
-  const product = PAYMENT_PRODUCTS[String(req.body.productCode ?? "base")] ?? PAYMENT_PRODUCTS.base;
+  const product = PAYMENT_PRODUCTS[String(req.body.productCode ?? "fantasia")] ?? PAYMENT_PRODUCTS.fantasia;
   const amount = req.body.amount ? parseMoney(req.body.amount, product.amount) : product.amount;
   const discount = req.body.discount ? parseMoney(req.body.discount, product.discount) : product.discount;
   const contactBeforePayment = getContact(phoneNumber);
@@ -4287,11 +4320,11 @@ app.post("/admin/contacts/:phoneNumber/paid", requireAdmin, async (req, res) => 
     note: req.body.note ?? "",
   });
   queueCtwaAttributionRecovery(phoneNumber, contactBeforePayment);
-  sendPurchaseConversionForPayment(paymentId, phoneNumber, {
+  trackContactOperation(() => sendPurchaseConversionForPayment(paymentId, phoneNumber, {
     conversationId: contactBeforePayment.conversation_id,
     amount,
     contact: contactBeforePayment,
-  }).catch((err) => {
+  })).catch((err) => {
     console.warn(`⚠️ Meta conversion background task failed for ${phoneNumber}:`, err.message);
   });
 
@@ -4316,6 +4349,10 @@ app.post("/admin/contacts/:phoneNumber/paid", requireAdmin, async (req, res) => 
   }
 
   res.redirect(303, adminPath(req, { status, section: "conversations" }));
+}
+
+app.post("/admin/contacts/:phoneNumber/paid", requireAdmin, async (req, res) => {
+  await runAdminContactOperation(res, () => processManualPayment(req, res));
 });
 
 app.post("/admin/contacts/:phoneNumber/unpaid", requireAdmin, (req, res) => {
@@ -4329,6 +4366,32 @@ app.post("/admin/contacts/:phoneNumber/revert-conversion", requireAdmin, (req, r
     status: reversal ? "conversion_reverted" : "conversion_revert_missing",
     section: req.body.section ?? "dashboard",
   }));
+});
+
+app.get("/admin/contacts.csv", requireSensitiveAdmin, (_, res) => {
+  const csv = contactHistoryCsv(listContactHistoryForExport());
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="contactos-${localDateKey()}.csv"`);
+  res.send(csv);
+});
+
+app.post("/admin/contacts/purge", requireSensitiveAdmin, async (req, res) => {
+  if (String(req.body.confirmation ?? "").trim() !== "BORRAR TODO") {
+    return res.redirect(303, adminPath(req, { status: "contacts_purge_failed", section: "conversations" }));
+  }
+
+  contactHistoryMaintenance = true;
+  try {
+    clearContactRuntimeState();
+    await waitForContactOperations();
+    clearContactRuntimeState();
+    const deleted = purgeContactHistory();
+    console.warn(JSON.stringify({ event: "contact_history_purged", ...deleted }));
+    return res.redirect(303, adminPath(req, { status: "contacts_purged", section: "conversations" }));
+  } finally {
+    contactHistoryMaintenance = false;
+    resumeDeferredWebhookEvents();
+  }
 });
 
 app.post("/admin/contacts/:phoneNumber/delete", requireAdmin, (req, res) => {
@@ -4400,6 +4463,9 @@ app.post("/admin/settings", requireAdmin, (req, res) => {
     next_reply_prompt: req.body.next_reply_prompt ?? "",
     paid_reply_prompt: req.body.paid_reply_prompt ?? "",
     initial_offer_text: String(req.body.initial_offer_text ?? "").trim() || getSetting("initial_offer_text"),
+    product_landing_text: String(req.body.product_landing_text ?? "").trim() || getSetting("product_landing_text"),
+    product_landing_url: String(req.body.product_landing_url ?? "").trim() || getSetting("product_landing_url"),
+    payment_alias: String(req.body.payment_alias ?? "").trim() || getSetting("payment_alias"),
     reminder2_offer_text: req.body.reminder2_offer_text ?? "",
     ask_name_text: req.body.ask_name_text ?? "",
     flash_offer_text: req.body.flash_offer_text ?? "",
@@ -4415,7 +4481,7 @@ app.post("/admin/settings", requireAdmin, (req, res) => {
 
 // ─── Incoming inbox messages ──────────────────────────────────────────────────
 
-async function processIncomingMessage({ req, body, isLocalTest }) {
+async function processIncomingMessageImpl({ req, body, isLocalTest }) {
   const { message, conversation } = body;
   const identity = getWebhookIdentity(body);
   const conversationId = identity.conversationId;
@@ -4476,17 +4542,18 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
     await sendWhatsAppMessage(conversationId, text, zernioOptionsFor(identity));
   };
 
+  let initialOfferClaimed = false;
   try {
     if (userMessage.trim() === "/clear") {
       clearHistory(phoneNumber);
-      await reply("Listo, arranquemos de nuevo 🙂\nQuerés que te pase la info del *Kit Yoga Pro*?");
+      await reply("Listo, arranquemos de nuevo 🙂\nQuerés que te pase la info de *Fantasía Color PRO*?");
       return;
     }
 
     if (userMessage.trim() === "/help") {
       const helpText =
-        "*Ofiprof - Kit Yoga Pro* 🧘\n" +
-        "Te puedo pasar info del kit, precios y forma de pago. Comandos: /clear reinicia la charla y /help muestra esta ayuda.";
+        "*Ofiprof - Fantasía Color PRO* ✨\n" +
+        "Te puedo pasar información del pack, contenido, precio y forma de pago. Comandos: /clear reinicia la charla y /help muestra esta ayuda.";
       await reply(helpText);
       return;
     }
@@ -4500,7 +4567,7 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
 
       const audioText =
         "Te soy sincero: para no interpretarte mal, prefiero que me lo mandes escrito por acá 🙏\n" +
-        "Así te respondo bien sobre el *Kit Yoga Pro* y no se pierde nada.";
+        "Así te respondo bien sobre *Fantasía Color PRO* y no se pierde nada.";
 
       await reply(audioText);
       return;
@@ -4516,7 +4583,7 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       return;
     }
 
-    const hasPaymentContext = hasCommercialPaymentContext(contact, history, hasMaterialVideoBeenSent(phoneNumber));
+    const hasPaymentContext = hasCommercialPaymentContext(contact, history, hasPaymentAliasBeenSent(phoneNumber));
     const isContextualPaymentAttachment = hasPaymentAttachment(message) && hasPaymentContext;
 
     if (!contact.paid && isContextualPaymentAttachment) {
@@ -4533,9 +4600,9 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
         console.warn(`⚠️ Unverified payment attachment sent to review for ${phoneNumber}`);
         return;
       }
-      const product = PAYMENT_PRODUCTS.promo;
+      const product = PAYMENT_PRODUCTS.fantasia;
       const amount = proofDetails.amount > 0 ? proofDetails.amount : product.amount;
-      const discount = Math.max(0, 26999 - amount);
+      const discount = product.discount;
       const wasAccessAlreadySent = Boolean(contact.product_link_sent);
 
       const paymentId = recordPayment(phoneNumber, {
@@ -4547,7 +4614,7 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
         note: proofDetails.isPaymentProof ? "Comprobante detectado automaticamente" : "Comprobante registrado automaticamente",
       });
       queueCtwaAttributionRecovery(phoneNumber, contact);
-      sendPurchaseConversionForPayment(paymentId, phoneNumber, { conversationId, amount, contact }).catch((err) => {
+      trackContactOperation(() => sendPurchaseConversionForPayment(paymentId, phoneNumber, { conversationId, amount, contact })).catch((err) => {
         console.warn(`⚠️ Meta conversion background task failed for ${phoneNumber}:`, err.message);
       });
 
@@ -4572,16 +4639,27 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       return;
     }
 
+    if (contact.paid && !contact.product_link_sent) {
+      addMessage(phoneNumber, "user", messageForAI, { conversationId });
+      const deliveryText = buildProductDeliveryText();
+      await reply(deliveryText);
+      addMessage(phoneNumber, "assistant", deliveryText, { conversationId });
+      markProductLinkSent(phoneNumber);
+      console.log(`📦 Pending product access delivered to ${phoneNumber}`);
+      return;
+    }
+
     if (!contact.paid && !hasGreetingBeenSent(phoneNumber)) {
       if (!claimInitialOffer(phoneNumber)) {
         console.log(`⏭️ Initial offer already claimed for ${phoneNumber}`);
         return;
       }
+      initialOfferClaimed = true;
 
       addMessage(phoneNumber, "user", messageForAI, { conversationId });
       const scheduledAt = scheduleDownsell(phoneNumber, conversationId);
       if (scheduledAt) {
-        console.log(`⏰ 23h downsell scheduled for ${phoneNumber}: ${scheduledAt}`);
+        console.log(`⏰ 23h reminder scheduled for ${phoneNumber}: ${scheduledAt}`);
       }
 
       await sendGreetingAudio(req, conversationId, phoneNumber, isLocalTest, identity);
@@ -4596,42 +4674,23 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
         addMessage(phoneNumber, "assistant", chunk, { conversationId });
       }
 
-      markMaterialPreviewOffered(phoneNumber);
+      const landingText = buildProductLandingText().trim();
+      if (landingText) {
+        await sleep(900);
+        await reply(landingText);
+        addMessage(phoneNumber, "assistant", landingText, { conversationId });
+      }
+      initialOfferClaimed = false;
       return;
     }
 
-    const MATERIAL_VIDEO_COOLDOWN_MS = 20000;
-    const videoSentAt = getMaterialVideoSentAt(phoneNumber);
-    if (videoSentAt) {
-      const elapsed = Date.now() - new Date(videoSentAt).getTime();
-      if (elapsed < MATERIAL_VIDEO_COOLDOWN_MS) {
-        const waitMs = MATERIAL_VIDEO_COOLDOWN_MS - elapsed;
-        console.log(`⏳ [${phoneNumber}] Cooldown post-video: waiting ${waitMs}ms`);
-        await sleep(waitMs);
-      }
-    }
-
-    const shouldSendMaterialVideo =
-      !contact.paid &&
-      !hasMaterialVideoBeenSent(phoneNumber) &&
-      hasMaterialPreviewBeenOffered(phoneNumber);
-
-    if (shouldSendMaterialVideo) {
+    if (!contact.paid && !hasPaymentAliasBeenSent(phoneNumber)) {
       addMessage(phoneNumber, "user", messageForAI, { conversationId });
-      markMaterialPreviewOffered(phoneNumber);
-      const videoSent = await sendMaterialVideoIfApproved(req, conversationId, phoneNumber, isLocalTest, identity);
-      if (videoSent) {
-        addMessage(phoneNumber, "assistant", "[video muestra del material]", { conversationId });
-        await sleep(900);
-        addMessage(phoneNumber, "assistant", MATERIAL_VIDEO_INTRO_TEXT, { conversationId });
-        await reply(MATERIAL_VIDEO_INTRO_TEXT);
-        await sleep(900);
-        addMessage(phoneNumber, "assistant", MATERIAL_PAYMENT_ALIAS_TEXT, { conversationId });
-        await reply(MATERIAL_PAYMENT_ALIAS_TEXT);
-        await sleep(900);
-        addMessage(phoneNumber, "assistant", MATERIAL_PAYMENT_NOTE_TEXT, { conversationId });
-        await reply(MATERIAL_PAYMENT_NOTE_TEXT);
-      }
+      const paymentAlias = getSetting("payment_alias", "").trim();
+      if (!paymentAlias) throw new Error("payment_alias is empty");
+      addMessage(phoneNumber, "assistant", paymentAlias, { conversationId });
+      await reply(paymentAlias);
+      markPaymentAliasSent(phoneNumber);
       return;
     }
 
@@ -4648,6 +4707,7 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
 
     console.log(`🤖 [${phoneNumber}] ${aiReply.slice(0, 80)}...`);
   } catch (err) {
+    if (initialOfferClaimed) releaseInitialOfferClaim(phoneNumber);
     console.error(`❌ Error handling message from ${phoneNumber}:`, err.message);
     try {
       await reply("Perdón, tuve un problema para responder. Probá escribirme de nuevo en un momento 🙏");
@@ -4655,6 +4715,10 @@ async function processIncomingMessage({ req, body, isLocalTest }) {
       console.error(`❌ Error sending failure message to ${phoneNumber}:`, sendErr.message);
     }
   }
+}
+
+function processIncomingMessage(options) {
+  return trackContactOperation(() => processIncomingMessageImpl(options));
 }
 
 function shouldDebounceMessage(body) {
@@ -4688,6 +4752,23 @@ function scheduleDebouncedMessage({ req, body, isLocalTest }) {
   }, MESSAGE_DEBOUNCE_MS);
 
   console.log(`⏳ [${key}] Debouncing ${entry.texts.length} message(s), waiting ${MESSAGE_DEBOUNCE_MS}ms`);
+}
+
+function captureConversationStarted(body) {
+  const identity = getWebhookIdentity(body);
+  const attribution = extractCtwaAttribution(body);
+  if (identity.contactId && attribution) {
+    saveContactCtwaAttribution(identity.contactId, {
+      ...attribution,
+      channel: identity.channel,
+      conversationId: identity.conversationId,
+      accountId: identity.accountId,
+      externalId: identity.externalId,
+      displayHandle: identity.displayHandle,
+      name: identity.name,
+      conversationUrl: identity.conversationUrl,
+    });
+  }
 }
 
 app.post("/webhook", async (req, res) => {
@@ -4732,24 +4813,17 @@ app.post("/webhook", async (req, res) => {
   }
 
   if (event === "conversation.started") {
-    const identity = getWebhookIdentity(req.body);
-    const attribution = extractCtwaAttribution(req.body);
-    if (identity.contactId && attribution) {
-      saveContactCtwaAttribution(identity.contactId, {
-        ...attribution,
-        channel: identity.channel,
-        conversationId: identity.conversationId,
-        accountId: identity.accountId,
-        externalId: identity.externalId,
-        displayHandle: identity.displayHandle,
-        name: identity.name,
-        conversationUrl: identity.conversationUrl,
-      });
-    }
+    if (contactHistoryMaintenance) deferredWebhookEvents.push({ req, body: req.body, isLocalTest });
+    else captureConversationStarted(req.body);
     return;
   }
 
   if (event !== "message.received" || message?.direction !== "incoming") return;
+
+  if (contactHistoryMaintenance) {
+    deferredWebhookEvents.push({ req, body: req.body, isLocalTest });
+    return;
+  }
 
   if (shouldDebounceMessage(req.body)) {
     scheduleDebouncedMessage({ req, body: req.body, isLocalTest });
@@ -4772,13 +4846,13 @@ app.get("/health", (_, res) => {
 
 setInterval(() => {
   processDueDownsells().catch((err) => {
-    console.error("❌ Downsell worker error:", err.message);
+    console.error("❌ Reminder worker error:", err.message);
   });
 }, 30_000);
 
 setTimeout(() => {
   processDueDownsells().catch((err) => {
-    console.error("❌ Downsell worker error:", err.message);
+    console.error("❌ Reminder worker error:", err.message);
   });
 }, 5_000);
 

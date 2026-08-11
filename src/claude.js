@@ -19,16 +19,8 @@ function ensureFirstReplyDetails(text, shouldEnsureDetails) {
 
   const missingDetails = [];
 
-  if (!/14[\s.,]?999/.test(text)) {
-    missingDetails.push("por hoy: $14999");
-  }
-
-  if (!/26[\s.,]?999/.test(text)) {
-    missingDetails.push("antes estaba: $26999");
-  }
-
-  if (!/kit\.yogapro/i.test(text)) {
-    missingDetails.push("alias: kit.yogapro");
+  if (!/16[\s.,]?999/.test(text)) {
+    missingDetails.push("precio WhatsApp: $16999");
   }
 
   if (missingDetails.length === 0) return text;
@@ -47,15 +39,15 @@ function normalizeReplyStyle(text) {
 }
 
 function containsPriceOrPaymentDetails(text) {
-  return /\$\s?\d|4[\s.,]?999|26[\s.,]?999|14[\s.,]?999|24[\s.,]?999|7[\s.,]?999|kit\.yogapro|ofiprof\.mp|alias|transfer|mercado\s?pago|\bpago\b/i.test(
+  return /\$\s?\d|16[\s.,]?999|24[\s.,]?999|pagos\.ofiprof|alias|transfer|mercado\s?pago|\bpago\b/i.test(
     text
   );
 }
 
 function safeNoPriceProductReply() {
   return (
-    "Te cuento: el *Kit Yoga Pro* sirve tanto para mejorar tu práctica en casa como para planificar clases si enseñás yoga.\n" +
-    "Incluye material progresivo, secuencias, videos, audios y herramientas prácticas. Qué parte te gustaría conocer mejor?"
+    "Te cuento: *Fantasía Color PRO* es una biblioteca digital con más de 100 libros para colorear y muchas actividades imprimibles para chicos.\n" +
+    "Tenés juegos, cuadernillos, papercraft y material creativo listo para descargar e imprimir. Qué te gustaría conocer?"
   );
 }
 
@@ -153,7 +145,7 @@ function isValidExtractedName(value) {
   if (name.length < 2 || name.length > 50) return false;
   if (name.split(" ").length > 4) return false;
   if (/https?:|www\.|@|\$|\d{3,}|[¿?¡!]/i.test(name)) return false;
-  if (/precio|valor|cuanto|cuánto|producto|kit|yoga|compr|pago|alias|ofiprof|comprobante|transfer|info|pasame|mandame/i.test(name)) {
+  if (/precio|valor|cuanto|cuánto|producto|fantas[ií]a|coloreable|compr|pago|alias|ofiprof|comprobante|transfer|info|pasame|mandame/i.test(name)) {
     return false;
   }
 
@@ -241,12 +233,12 @@ export async function getAIResponse(phoneNumber, userMessage, history, options =
   const isPriceInquiry = Boolean(options.isPriceInquiry);
   const firstReplyPrompt = isPriceInquiry
     ? getSetting("first_reply_prompt")
-    : "Primer mensaje útil de IA después de la oferta inicial: respondé en 1 o 2 líneas según la duda. Adaptá el beneficio a práctica en casa o uso profesional, sin repetir toda la oferta, el alias ni el nombre de la cuenta.";
+    : "Primer mensaje útil de IA después de la información inicial: respondé en 1 o 2 líneas según la duda. Si preguntan por una serie, personaje o temática, confirmá que sí está incluido. No repitas toda la oferta ni el alias.";
   const salesBoundary = isPaidContact
     ? ""
     : isPriceInquiry
-      ? "La persona pregunto por precio, valor, pago o compra. Si mencionas precio, siempre deci que por hoy esta $14999 y antes estaba $26999. No escribas alias ni nombre de cuenta; el sistema los manda separados despues del video para que sean faciles de copiar."
-      : "No menciones precios, alias de pago ni instrucciones de compra salvo que la persona pregunte explícitamente por precio, valor, pago o cómo comprar. Adaptá la respuesta a su objetivo: mejorar la práctica en casa o usar el material para planificar y enseñar yoga.";
+      ? "La persona preguntó por precio, valor, pago o compra. Si mencionás precio, siempre decí que por WhatsApp está $16.999. No escribas el alias; el sistema lo manda separado para que sea fácil de copiar."
+      : "No menciones precios, alias ni instrucciones de compra salvo que la persona pregunte explícitamente. Si pregunta por una serie, personaje, temática o dibujo, confirmá que sí está incluido.";
   const messages = [
     { role: "system", content: getSetting("master_prompt") },
     {

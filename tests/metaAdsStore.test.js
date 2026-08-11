@@ -6,7 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 test("daily Meta Ads metrics are isolated by platform account", async () => {
-  const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-meta-ads-store-"));
+const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-meta-ads-store-"));
   process.env.CRM_DATA_DIR = dataDir;
   const store = await import(`../src/store.js?meta-accounts=${Date.now()}`);
 
@@ -38,7 +38,7 @@ test("daily Meta Ads metrics are isolated by platform account", async () => {
 });
 
 test("legacy daily metrics remain unassigned until refreshed from a known account", async () => {
-  const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-meta-ads-migration-"));
+  const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-meta-ads-migration-"));
   const databasePath = path.join(dataDir, "ofiprof-crm.sqlite");
   const legacyDb = new DatabaseSync(databasePath);
   legacyDb.exec(`

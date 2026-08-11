@@ -10,7 +10,7 @@ import {
   reminderTextChunks,
 } from "../src/reminderPolicy.js";
 
-const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-reminders-"));
+const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-reminders-"));
 process.env.CRM_DATA_DIR = dataDir;
 const store = await import("../src/store.js");
 const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
@@ -39,6 +39,14 @@ test("initial offer can be claimed only once", () => {
   assert.equal(store.claimInitialOffer(phoneNumber), false);
 });
 
+test("a failed initial send can release its claim for retry", () => {
+  const phoneNumber = "+541010101012";
+  store.ensureContact(phoneNumber, { conversationId: "conversation-initial-retry" });
+  assert.equal(store.claimInitialOffer(phoneNumber), true);
+  store.releaseInitialOfferClaim(phoneNumber);
+  assert.equal(store.claimInitialOffer(phoneNumber), true);
+});
+
 test("a due 23h downsell can be claimed only once", () => {
   const phoneNumber = "+542222222222";
   const now = new Date("2026-07-11T12:00:00.000Z");
@@ -64,11 +72,27 @@ test("a failed claimed downsell is not automatically due again", () => {
   assert.equal(store.listDueReminder2s(new Date("2026-07-12T12:00:00.000Z")).length, 0);
 });
 
-test("initial offer includes home practice, professional use, and video confirmation", () => {
+test("initial offer and delivery settings describe Fantasía Color PRO", () => {
   const offer = store.getSetting("initial_offer_text");
-  assert.match(offer, /práctica de yoga en casa/i);
-  assert.match(offer, /profesor/i);
-  assert.match(offer, /te comparto un video/i);
+  assert.match(offer, /Fantasía Color PRO/i);
+  assert.match(offer, /más de 100 libros/i);
+  assert.match(offer, /\$16\.999/i);
+  assert.equal(store.getSetting("payment_alias"), "pagos.ofiprof");
+  assert.equal(store.getSetting("product_landing_url"), "https://fantasia.ofiprof.com");
+  assert.match(store.getSetting("product_landing_text"), /\{\{product_landing_url\}\}/);
+  assert.match(store.getSetting("product_access_url"), /124cjyl9aEWaEkOxmX13xy0YC27xdjo5E/);
+  assert.match(store.getSetting("master_prompt"), /respondé siempre que sí está incluido/i);
+  assert.equal(store.getSetting("product_config_version"), "fantasia-v1");
+});
+
+test("payment alias can be sent only once per product flow", () => {
+  const phoneNumber = "+541010101011";
+  store.ensureContact(phoneNumber, { conversationId: "conversation-alias" });
+  assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), false);
+  store.markPaymentAliasSent(phoneNumber);
+  assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), true);
+  store.clearHistory(phoneNumber);
+  assert.equal(store.hasPaymentAliasBeenSent(phoneNumber), false);
 });
 
 test("Instagram reminder text is split below the provider limit", () => {
@@ -82,7 +106,7 @@ test("Instagram reminder text is split below the provider limit", () => {
 });
 
 test("short reminder text remains a single message", () => {
-  const text = "holaa, te mando por acá el detalle porque antes te mandé solo el video 🪴";
+  const text = "holaa, te mando por acá el detalle de Fantasía Color PRO ✨";
   assert.deepEqual(reminderTextChunks(text, "instagram"), [text]);
 });
 

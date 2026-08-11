@@ -27,111 +27,30 @@ function measuredGet(name, statement, params = []) {
   return measureSync(name, () => statement.get(...params));
 }
 
-const LEGACY_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por WhatsApp a leads que llegan desde anuncios de Meta.
-
-Producto principal: Kit Yoga Pro.
-- Infoproducto para aprender yoga desde nivel inicial hasta experto.
-- Incluye 6 modulos progresivos.
-- Formato: videos + audios para practicar y repasar.
-- Solo por hoy: $4999.
-- Antes estaba: $26999.
-- Version completa incluye 3 bonus de productividad.
-- Alias de pago: kit.yogapro
-
-Objetivo comercial:
-- Llevar la conversacion hacia la compra sin sonar insistente.
-- En el primer mensaje util al lead, presentar el producto en version corta, mostrar ambos precios y pasar el alias kit.yogapro.
-- Recomendar la version completa cuando tenga sentido, porque suma los 3 bonus.
-- Si la persona duda, resolver objeciones de forma simple: nivel inicial, tiempo, acceso a videos/audios, diferencia de precios, bonus, forma de pago.
-- Si la persona pide pagar, repetir alias y pedir que envie comprobante por este chat.
-- Si la persona dice que ya pago o envio comprobante, no sigas vendiendo: agradece y deci que una persona del equipo lo revisa.
-- No inventes otros descuentos ni precios: solo por hoy $4999, antes $26999.
-
-Estilo de respuesta:
-- Español rioplatense natural, con voseo.
-- Sona humano, cercano y tranquilo. No digas que sos IA, bot, automatizacion ni asistente virtual.
-- Varia saludos, estructura y palabras en cada respuesta. Evita repetir plantillas exactas.
-- Usa 1 o 2 emojis como maximo cuando sumen calidez.
-- WhatsApp: mensajes breves, con saltos de linea, bullets simples y negritas con *texto*.
-- Respuestas cortas: 2 a 4 lineas como maximo.
-- Evita bloques largos y evita separar cada idea con una linea vacia.
-- Una sola pregunta al final, solo si ayuda a avanzar.
-- No repitas toda la oferta si ya la explicaste.
-- No prometas acceso instantaneo ni links si el usuario no los dio.
-- No inventes descuentos, garantias, cuotas, stock, fechas, plataformas ni medios de pago extra.
-
-Datos que siempre deben ser consistentes:
-- Marca: Ofiprof.
-- Producto: Kit Yoga Pro.
-- Precio por hoy: $4999.
-- Precio anterior: $26999.
-- Alias: kit.yogapro`;
-
-const LEGACY_FIRST_REPLY_PROMPT =
-  "Primer mensaje util: maximo 4 lineas. Si preguntan por el Kit Yoga Pro, contá de forma natural que incluye modulos con videos/audios para practicar y ordenar la rutina. No menciones precios ni alias salvo que pregunten precio o como comprar. Una pregunta corta al final.";
-
-const LEGACY_NEXT_REPLY_PROMPT =
-  "Ya hay conversacion previa. Responde en 1 a 3 lineas, segun contexto, y no repitas toda la presentacion salvo que la persona la pida. No menciones precios ni alias salvo que pregunten precio o como comprar.";
-
-const LEGACY_ASK_NAME_TEXT = "¿Cómo te llamás?";
-
-const LEGACY_HUMANIZED_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por WhatsApp a leads que llegan desde anuncios de Meta.
-Producto principal: Kit Yoga Pro. Es un infoproducto para aprender yoga desde nivel inicial hasta experto. Incluye 6 modulos progresivos en formato videos + audios para practicar y repasar. Solo por hoy esta $4999. Antes estaba $26999. Alias de pago: kit.yogapro. A nombre de Nicolas Stamm.
-Objetivo comercial: acompañar la conversacion hacia la compra sin sonar insistente. Priorizá mensajes cortos y naturales. Si el sistema ya mandó audio o imagen, apoyate en eso y no repitas toda la explicación. Mencioná precios y alias solo si la persona pregunta por precio, pago o compra.
-Estilo: español rioplatense con voseo. Soná como una persona real, cercana y tranquila. No digas que sos IA, bot, automatizacion ni asistente virtual. No uses signos de apertura como ¿ o ¡. Usá pocos saltos de linea: preferí 1 parrafo corto o 2 lineas como maximo. Evitá bloques largos, listas largas y tono de folleto. Una sola pregunta al final cuando ayude a avanzar.
-No inventes descuentos, garantias, cuotas, stock, fechas, plataformas ni medios de pago extra. Si mencionas precio, siempre deci que por hoy esta $4999 y antes estaba $26999.`;
-
-const LEGACY_HUMANIZED_FIRST_REPLY_PROMPT =
-  "Primer mensaje util: 1 o 2 lineas, tono humano de WhatsApp. Si preguntan por el Kit Yoga Pro, contá natural que incluye videos y audios para practicar y ordenar la rutina. No uses signos de apertura. No menciones precios ni alias salvo que pregunten precio o como comprar. Cerrá con una pregunta corta solo si ayuda.";
-
-const LEGACY_HUMANIZED_NEXT_REPLY_PROMPT =
-  "Ya hay conversacion previa. Responde como persona real en 1 o 2 lineas, con pocos saltos de linea. No repitas toda la presentacion salvo que la persona la pida. No uses signos de apertura. No menciones precios ni alias salvo que pregunten precio o como comprar.";
-
-const PROFESSIONAL_ONLY_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
-
-Producto principal: Kit Yoga Pro. Es un recurso para profesores, profesoras e instructores de yoga que quieren organizar mejor sus clases, dejar de improvisar y tener plantillas listas para usar. Incluye clases armadas, secuencias, videos y audios de apoyo para preparar encuentros más claros, ordenados y profesionales.
-
-Oferta vigente:
-- Antes ~$26.999~.
-- Solo por hoy $14.999.
-- El alias de pago lo manda el sistema en un mensaje separado despues de enviar el video del material.
-
-Flujo comercial:
-- Si la persona pide información, respondé breve y natural, enfocando en organización de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar.
-- No inventes precios, descuentos, cuotas, garantías, fechas, stock, plataformas ni medios de pago.
-- Si mencionás precio, siempre usá $14.999 y precio anterior $26.999.
-- No escribas el alias kit.yogapro ni el nombre Nicolás Stamm en respuestas de IA; eso lo envia el sistema despues del video para que quede facil de copiar.
-- Si la persona pregunta cómo pagar antes del video, respondé natural que primero le compartís una vista del material y después le dejás el alias.
-- Si la persona dice que pagó o manda comprobante, no sigas vendiendo.
-- No vendas el kit como curso de práctica personal salvo que la persona lo pregunte específicamente.
-
-Estilo:
-- Español rioplatense con voseo.
-- Soná como una persona real, cercana y tranquila.
-- No digas que sos IA, bot, automatización ni asistente virtual.
-- No uses signos de apertura como ¿ o ¡.
-- Respuestas cortas: 1 a 3 líneas.
-- Evitá bloques largos, listas largas y tono de folleto.
-- Una sola pregunta al final solo cuando ayude a avanzar.`;
+const PRODUCT_CONFIG_VERSION = "fantasia-v1";
+const CURRENT_PRODUCT_CODE = "fantasia-color-pro";
 
 const DEFAULT_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
 
-Producto principal: Kit Yoga Pro. Es un recurso completo tanto para personas que quieren mejorar y sostener su práctica de yoga en casa como para profesores, profesoras e instructores que buscan planificar clases, organizar alumnos y enseñar con más seguridad. Incluye material progresivo, secuencias, posturas, videos, audios y herramientas prácticas.
+Producto principal: Fantasía Color PRO. Es una biblioteca digital de imprimibles creativos para niños y familias. Incluye más de 100 libros para colorear, más de 40 GB y 11.700 páginas, además de papercraft, rutinas visuales, más de 500 cuadernillos didácticos, más de 300 juegos de mesa y actividades bíblicas.
 
 Oferta vigente:
-- Antes ~$26.999~.
-- Solo por hoy $14.999.
-- El sistema ya envía la oferta completa al inicio y luego pregunta si la persona quiere ver un video del material.
-- El alias de pago lo manda el sistema después del video.
+- Precio exclusivo por WhatsApp: $16.999, un único pago.
+- La landing puede mostrar otro precio; para este chat siempre rige $16.999.
+- El producto es 100% digital, descargable e imprimible sin límites.
+- También puede usarse en iPad o tablet con aplicaciones compatibles con PDF.
+- El sistema envía la información y la landing al inicio.
+- Después de la primera respuesta del contacto, el sistema manda el alias pagos.ofiprof en un mensaje separado.
 
 Flujo comercial:
 - Respondé dudas según el contexto sin repetir la oferta completa que el sistema ya envió.
-- Si la persona practica en casa, enfocá la respuesta en progresión, claridad, constancia y acompañamiento.
-- Si da clases, enfocá la respuesta en planificación, secuencias listas, organización y seguridad para enseñar.
+- Enfocá los beneficios en variedad, calidad de impresión, actividades sin pantallas, aprendizaje, creatividad y tiempo en familia.
+- Si preguntan si incluye una serie, personaje, temática o dibujo específico, respondé siempre que sí está incluido y ofrecé ayudar a encontrarlo dentro de la biblioteca.
 - No inventes precios, descuentos, cuotas, garantías, fechas, stock, plataformas ni medios de pago.
-- Si mencionás precio, siempre usá $14.999 y precio anterior $26.999.
-- No escribas el alias kit.yogapro ni el nombre Nicolás Stamm; el sistema los envía después del video.
+- Si mencionás precio, siempre usá $16.999 por WhatsApp.
+- No escribas el alias pagos.ofiprof; el sistema lo envía por separado.
 - Si la persona dice que pagó o manda comprobante, no sigas vendiendo.
+- El acceso se entrega después de confirmar el pago.
 
 Estilo:
 - Español rioplatense con voseo.
@@ -142,95 +61,68 @@ Estilo:
 - Evitá bloques largos, listas largas y tono de folleto.
 - Una sola pregunta al final solo cuando ayude a avanzar.`;
 
-const PROFESSIONAL_ONLY_FIRST_REPLY_PROMPT =
-  "Primer mensaje util: 1 o 2 lineas, tono humano de chat. Si preguntan por el Kit Yoga Pro, contá natural que está pensado para profes de yoga que quieren organizar clases, usar plantillas listas y dejar de improvisar. No uses signos de apertura. No menciones alias. Cerrá con una pregunta corta solo si ayuda.";
-
 const DEFAULT_FIRST_REPLY_PROMPT =
-  "Primer mensaje útil de IA después de la oferta inicial: respondé en 1 o 2 líneas según la duda. Adaptá el beneficio a práctica en casa o uso profesional, sin repetir toda la oferta, el alias ni el nombre de la cuenta.";
-
-const PROFESSIONAL_ONLY_NEXT_REPLY_PROMPT =
-  "Ya hay conversacion previa. Respondé como persona real en 1 o 2 lineas, con foco en organizacion de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar. No repitas toda la presentacion salvo que la persona lo pida. No uses signos de apertura. Si mencionás precio, siempre decí $14.999 y antes $26.999. No escribas el alias ni el nombre de la cuenta; el sistema lo manda separado despues del video.";
+  "Primer mensaje útil de IA después de la información inicial: respondé en 1 o 2 líneas según la duda. Si preguntan por una serie, personaje o temática, confirmá que sí está incluido. No repitas toda la oferta ni el alias.";
 
 const DEFAULT_NEXT_REPLY_PROMPT =
-  "Ya hay conversación previa. Respondé como persona real en 1 o 2 líneas y adaptá el mensaje al objetivo de la persona: mejorar su práctica en casa o usar el material para enseñar. No repitas toda la oferta salvo que la pida. Si mencionás precio, usá $14.999 y antes $26.999. No escribas el alias ni el nombre de la cuenta; el sistema los manda después del video.";
+  "Ya hay conversación previa. Respondé como persona real en 1 o 2 líneas. Si preguntan por una serie, personaje, temática o dibujo, confirmá que sí está incluido. No repitas toda la presentación salvo que la pidan. Si mencionás precio, usá $16.999 por WhatsApp. No escribas el alias porque el sistema lo manda separado.";
 
 const DEFAULT_FOLLOWUP_TEXT =
-  `te libero el acceso ahora para que puedas verlo tranquilo.
-
-Si te sirve y lo vas a usar, después nos transferís los $14.999 al alias:
-
-kit.yogapro
-A nombre de Nicolás Stamm
-
-Acá tenés el material:
+  `Te libero el acceso a Fantasía Color PRO:
 {{product_access_url}}`;
 
 const DEFAULT_INITIAL_OFFER_TEXT = `Te cuento bien qué incluye la oferta:
 
-El Kit Yoga Pro es un sistema completo tanto para mejorar y sostener tu práctica de yoga en casa como para planificar clases, organizar alumnos y enseñar con más seguridad.
+*Fantasía Color PRO* es una biblioteca digital de imprimibles para que los chicos tengan actividades creativas, educativas y sin pantallas listas para usar.
 
 Incluye:
 
-✅ 6 tomos en PDF
-✅ 36 módulos, desde nivel básico hasta avanzado
-✅ Más de 250 páginas
-✅ Secuencias, posturas y alineación
-✅ Yoga terapéutico y adaptativo
-✅ Pranayama, meditación y filosofía
-✅ 6 videos explicativos
-✅ 6 cuestionarios para fijar los contenidos
+✅ Más de 100 libros para colorear
+✅ Más de 40 GB y 11.700 páginas
+✅ Archivos de alta calidad, listos para imprimir
+✅ Uso en iPad o tablet
+✅ Papercraft, rutinas visuales y cuadernillos didácticos
+✅ Más de 300 juegos imprimibles
+✅ Actividades bíblicas para niños
+✅ Actualizaciones y libros nuevos
 
-Además, te llevás 3 bonos de productividad:
+Podés imprimir tus páginas favoritas todas las veces que quieras.
 
-📁 Carpeta del Profesor: fichas médicas, asistencia, pagos, recibos y planificación anual.
+Por WhatsApp te queda en un único pago de *$16.999* ✨`;
 
-📣 De Profe a Centro de Yoga: flyers, guiones de WhatsApp, clases abiertas y sistema de referidos.
+const DEFAULT_PRODUCT_LANDING_URL = "https://fantasia.ofiprof.com";
+const DEFAULT_PRODUCT_LANDING_TEXT = `Si querés ver más detalles y algunas muestras, podés mirar acá:
+{{product_landing_url}}`;
 
-🧘‍♀️ Creación de Talleres Especiales: 8 talleres listos para ofrecer, con cronograma, precios orientativos y guiones de venta.
+const DEFAULT_REMINDER2_OFFER_TEXT = `Hola! Te escribo por *Fantasía Color PRO* ✨
 
-También incluye versiones en audio para que puedas estudiar o repasar cuando quieras.
+La oferta exclusiva por WhatsApp sigue disponible a *$16.999*.
 
-En total recibís:
-
-9 PDFs + 6 videos + 6 cuestionarios + 3 audios
-
-El acceso es inmediato, el material es descargable y podés usarlo desde el celular, tablet o computadora.
-
-Antes ~$26.999~. Hoy podés llevarte el kit completo más los 3 bonos por un único pago de $14.999 🪴
-
-Si querés, te comparto un video para que veas por dentro cómo es el material y puedas decidir tranquilo. Te lo mando?`;
-
-const DEFAULT_REMINDER2_OFFER_TEXT = `¡Hola! Queremos que el dinero no sea un obstáculo y que este material llegue a todas las personas que lo necesiten.
-
-Por eso, podés llevarte el Kit completo + los 3 bonos por solo $6.999.
-
-Cualquier cosa, acá estamos 🌿`;
+Tenés más de 100 libros, imprimibles educativos, juegos y actividades para chicos. Si querés aprovecharla, respondeme por acá.`;
 
 const DEFAULT_PAID_REPLY_PROMPT =
-  "Esta persona ya compro el Kit Yoga Pro. Responde como soporte post-compra en 1 o 2 lineas, tono humano y sin signos de apertura. Ayuda con acceso, uso del material o dudas simples. No vendas, no ofrezcas descuentos y no repitas precios.";
+  "Esta persona ya compró Fantasía Color PRO. Respondé como soporte post-compra en 1 o 2 líneas, tono humano y sin signos de apertura. Ayudá con acceso, descarga, impresión o uso de los archivos. No vendas ni repitas precios.";
 
 const DEFAULT_PRODUCT_ACCESS_URL =
-  "https://drive.google.com/drive/folders/1sbAMMzvpmxZTXlK8psdeoZazBMzf4d6h";
+  "https://drive.google.com/drive/folders/124cjyl9aEWaEkOxmX13xy0YC27xdjo5E?usp=share_link";
 
 const DEFAULT_PRODUCT_DELIVERY_TEXT = `Pago confirmado ✅
-Te dejo el acceso al material del *Kit Yoga Pro*:
+Te dejo el acceso a *Fantasía Color PRO*:
 {{product_access_url}}
 Cualquier cosa, escribime por acá.`;
 
 const DEFAULT_ASK_NAME_TEXT = "Cómo te llamás?";
+const DEFAULT_PAYMENT_ALIAS = "pagos.ofiprof";
 
-const DEFAULT_FLASH_OFFER_TEXT = `el dinero no tiene que ser un obstáculo para empezar 🌱
+const DEFAULT_FLASH_OFFER_TEXT = `Te dejo la oferta de *Fantasía Color PRO* por WhatsApp: *$16.999* ✨
 
-Te ofrezco una *oferta relámpago*: el *Kit Yoga Pro* completo por solo *$6.999* (antes *$26.999*).
+Transferís al alias:
 
-Si te interesa, depositás al alias:
+pagos.ofiprof
 
-kit.yogapro
-A nombre de Nicolás Stamm
+y me mandás el comprobante por acá.`;
 
-y me mandás el comprobante por acá ✨`;
-
-const DEFAULT_SETTINGS = {
+const PRODUCT_DEFAULT_SETTINGS = {
   master_prompt: DEFAULT_MASTER_PROMPT,
   first_reply_prompt: DEFAULT_FIRST_REPLY_PROMPT,
   next_reply_prompt: DEFAULT_NEXT_REPLY_PROMPT,
@@ -240,11 +132,18 @@ const DEFAULT_SETTINGS = {
   paid_reply_prompt: DEFAULT_PAID_REPLY_PROMPT,
   flash_offer_text: DEFAULT_FLASH_OFFER_TEXT,
   ask_name_text: DEFAULT_ASK_NAME_TEXT,
+  payment_alias: DEFAULT_PAYMENT_ALIAS,
+  product_landing_url: DEFAULT_PRODUCT_LANDING_URL,
+  product_landing_text: DEFAULT_PRODUCT_LANDING_TEXT,
+  product_access_url: DEFAULT_PRODUCT_ACCESS_URL,
+  product_delivery_text: DEFAULT_PRODUCT_DELIVERY_TEXT,
+};
+
+const DEFAULT_SETTINGS = {
+  ...PRODUCT_DEFAULT_SETTINGS,
   openai_chat_model: "gpt-4o-mini",
   openai_max_tokens: "180",
   openai_temperature: "0.9",
-  product_access_url: DEFAULT_PRODUCT_ACCESS_URL,
-  product_delivery_text: DEFAULT_PRODUCT_DELIVERY_TEXT,
   meta_ads_destination_id: "",
 };
 
@@ -284,8 +183,7 @@ db.exec(`
     reminder2_scheduled_at TEXT,
     reminder2_attempted_at TEXT,
     reminder2_sent_at TEXT,
-    material_preview_offered INTEGER NOT NULL DEFAULT 0,
-    material_video_sent INTEGER NOT NULL DEFAULT 0,
+    payment_alias_sent INTEGER NOT NULL DEFAULT 0,
     last_incoming_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -419,9 +317,7 @@ const contactMigrations = [
   ["reminder2_scheduled_at", "ALTER TABLE contacts ADD COLUMN reminder2_scheduled_at TEXT"],
   ["reminder2_attempted_at", "ALTER TABLE contacts ADD COLUMN reminder2_attempted_at TEXT"],
   ["reminder2_sent_at", "ALTER TABLE contacts ADD COLUMN reminder2_sent_at TEXT"],
-  ["material_preview_offered", "ALTER TABLE contacts ADD COLUMN material_preview_offered INTEGER NOT NULL DEFAULT 0"],
-  ["material_video_sent", "ALTER TABLE contacts ADD COLUMN material_video_sent INTEGER NOT NULL DEFAULT 0"],
-  ["material_video_sent_at", "ALTER TABLE contacts ADD COLUMN material_video_sent_at TEXT"],
+  ["payment_alias_sent", "ALTER TABLE contacts ADD COLUMN payment_alias_sent INTEGER NOT NULL DEFAULT 0"],
   ["last_incoming_at", "ALTER TABLE contacts ADD COLUMN last_incoming_at TEXT"],
   ["name", "ALTER TABLE contacts ADD COLUMN name TEXT DEFAULT ''"],
   ["name_asked", "ALTER TABLE contacts ADD COLUMN name_asked INTEGER NOT NULL DEFAULT 0"],
@@ -517,134 +413,42 @@ for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run(key, value);
 }
 
-function migrateDefaultSetting(key, nextValue, legacyValues) {
-  const update = db.prepare("UPDATE settings SET value = ? WHERE key = ? AND value = ?");
+const storedProductVersion = db.prepare("SELECT value FROM settings WHERE key = 'product_config_version'").get()?.value;
+if (storedProductVersion !== PRODUCT_CONFIG_VERSION) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const upsertSetting = db.prepare(
+      "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    );
+    for (const [key, value] of Object.entries(PRODUCT_DEFAULT_SETTINGS)) upsertSetting.run(key, value);
+    upsertSetting.run("followup_enabled", "false");
+    upsertSetting.run("product_config_version", PRODUCT_CONFIG_VERSION);
 
-  for (const legacyValue of legacyValues) {
-    update.run(nextValue, key, legacyValue);
+    db.prepare(
+      `UPDATE contacts
+       SET paid = 0,
+           paid_at = NULL,
+           product_link_sent = 0,
+           product_link_sent_at = NULL,
+           greeting_sent = 0,
+           greeting_audio_sent = 0,
+           promo_scheduled_at = NULL,
+           promo_sent = 0,
+           promo_sent_at = NULL,
+           reminder_scheduled_at = NULL,
+           reminder_attempted_at = NULL,
+           reminder_sent_at = NULL,
+           reminder2_scheduled_at = NULL,
+           reminder2_attempted_at = NULL,
+           reminder2_sent_at = NULL,
+           payment_alias_sent = 0`
+    ).run();
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 }
-
-function replaceSettingText(key, fromText, toText) {
-  db.prepare("UPDATE settings SET value = replace(value, ?, ?) WHERE key = ?").run(fromText, toText, key);
-}
-
-migrateDefaultSetting("master_prompt", DEFAULT_MASTER_PROMPT, [
-  LEGACY_MASTER_PROMPT,
-  LEGACY_HUMANIZED_MASTER_PROMPT,
-  PROFESSIONAL_ONLY_MASTER_PROMPT,
-]);
-migrateDefaultSetting("master_prompt", DEFAULT_MASTER_PROMPT, [
-  `Sos una persona del equipo comercial de Ofiprof respondiendo por WhatsApp a leads que llegan desde anuncios de Meta.
-
-Producto principal: Kit Yoga Pro. Es un recurso para profesores, profesoras e instructores de yoga que quieren organizar mejor sus clases, dejar de improvisar y tener plantillas listas para usar. Incluye clases armadas, secuencias, videos y audios de apoyo para preparar encuentros más claros, ordenados y profesionales.
-
-Oferta vigente:
-- Antes ~$26.999~.
-- Solo por hoy $4.999.
-- Alias de pago: kit.yogapro.
-- A nombre de Nicolás Stamm.
-
-Flujo comercial:
-- Si la persona pide información, respondé breve y natural, enfocando en organización de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar.
-- No inventes precios, descuentos, cuotas, garantías, fechas, stock, plataformas ni medios de pago.
-- Si mencionás precio, siempre usá $4.999 y precio anterior $26.999.
-- Si la persona pregunta cómo pagar, indicá alias kit.yogapro a nombre de Nicolás Stamm y pedí que envíe el comprobante por este chat.
-- Si la persona dice que pagó o manda comprobante, no sigas vendiendo.
-- No vendas el kit como curso de práctica personal salvo que la persona lo pregunte específicamente.
-
-Estilo:
-- Español rioplatense con voseo.
-- Soná como una persona real, cercana y tranquila.
-- No digas que sos IA, bot, automatización ni asistente virtual.
-- No uses signos de apertura como ¿ o ¡.
-- Respuestas cortas: 1 a 3 líneas.
-- Evitá bloques largos, listas largas y tono de folleto.
-- Una sola pregunta al final solo cuando ayude a avanzar.`,
-  `Sos una persona del equipo comercial de Ofiprof respondiendo por WhatsApp a leads que llegan desde anuncios de Meta.
-Producto principal: Kit Yoga Pro. Es un recurso para profesores, profesoras e instructores de yoga que quieren organizar mejor sus clases, dejar de improvisar y tener plantillas listas para usar. Incluye clases armadas, secuencias, videos y audios de apoyo para preparar encuentros más claros, ordenados y profesionales. Version base sin bonus: $14999. Version completa con 3 bonus de productividad: $24999. Alias de pago: kit.yogapro
-Dolor principal: muchos profes saben enseñar, pero pierden tiempo pensando qué clase dar, cómo estructurarla o cómo variar sus propuestas. El kit ayuda a tener una base organizada para planificar más rápido, dar clases con más seguridad y acompañar mejor a sus alumnos.
-Objetivo comercial: acompañar la conversacion hacia la compra sin sonar insistente. Enfocá la venta en organizacion, claridad, ahorro de tiempo, clases listas y crecimiento profesional como profe. Si el sistema ya mandó audio o imagen, apoyate en eso y no repitas toda la explicación. No lo vendas como un curso para profundizar la práctica personal salvo que la persona lo pregunte específicamente. Mencioná precios y alias solo si la persona pregunta por precio, pago o compra.
-Estilo: español rioplatense con voseo. Soná como una persona real, cercana y tranquila. No digas que sos IA, bot, automatizacion ni asistente virtual. No uses signos de apertura como ¿ o ¡. Usá pocos saltos de linea: preferí 1 parrafo corto o 2 lineas como maximo. Evitá bloques largos, listas largas y tono de folleto. Una sola pregunta al final cuando ayude a avanzar.
-No inventes descuentos, garantias, cuotas, stock, fechas, plataformas ni medios de pago extra. No ofrezcas el descuento de $7999 salvo que el sistema lo envie como recuperacion.`,
-]);
-migrateDefaultSetting("first_reply_prompt", DEFAULT_FIRST_REPLY_PROMPT, [
-  LEGACY_FIRST_REPLY_PROMPT,
-  LEGACY_HUMANIZED_FIRST_REPLY_PROMPT,
-  PROFESSIONAL_ONLY_FIRST_REPLY_PROMPT,
-  "Primer mensaje util: 1 o 2 lineas, tono humano de WhatsApp. Si preguntan por el Kit Yoga Pro, contá natural que está pensado para profes de yoga que quieren organizar clases, usar plantillas listas y dejar de improvisar. No uses signos de apertura. No menciones precios ni alias salvo que pregunten precio o como comprar. Cerrá con una pregunta corta solo si ayuda.",
-  "Primer mensaje util despues de un audio de saludo: maximo 4 lineas. Deci: Kit Yoga Pro tiene 6 modulos con videos/audios. Base $14999. Completo $24999 con 3 bonus. Alias ofiprof.mp. Una pregunta corta al final.",
-]);
-migrateDefaultSetting("next_reply_prompt", DEFAULT_NEXT_REPLY_PROMPT, [
-  LEGACY_NEXT_REPLY_PROMPT,
-  LEGACY_HUMANIZED_NEXT_REPLY_PROMPT,
-  PROFESSIONAL_ONLY_NEXT_REPLY_PROMPT,
-  "Ya hay conversacion previa. Responde en 1 a 3 lineas, segun contexto, y no repitas toda la presentacion salvo que la persona la pida.",
-  "Ya hay conversacion previa. Responde como persona real en 1 o 2 lineas, con foco en organizacion de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar. No lo lleves a práctica personal salvo que lo pidan. No uses signos de apertura. No menciones precios ni alias salvo que pregunten precio o como comprar.",
-  "Ya hay conversacion previa. Responde como persona real en 1 o 2 lineas, con foco en organizacion de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar. No lo lleves a práctica personal salvo que lo pidan. No uses signos de apertura. Si mencionas precio, siempre deci que por hoy esta $4999 y antes estaba $26999.",
-  "Ya hay conversacion previa. Respondé como persona real en 1 o 2 lineas, con foco en organizacion de clases, plantillas listas, ahorro de tiempo y seguridad para enseñar. No repitas toda la presentacion salvo que la persona lo pida. No uses signos de apertura. Si mencionás precio, siempre decí $4.999 y antes $26.999. Si preguntan cómo pagar, pasá alias kit.yogapro a nombre de Nicolás Stamm.",
-]);
-migrateDefaultSetting("paid_reply_prompt", DEFAULT_PAID_REPLY_PROMPT, [
-  "Esta persona ya compro el Kit Yoga Pro. Responde como soporte post-compra: ayuda con acceso, uso del material o dudas simples. No vendas, no ofrezcas descuentos y no repitas precios.",
-]);
-migrateDefaultSetting("followup_text", DEFAULT_FOLLOWUP_TEXT, [
-  "Te dejamos una oportunidad para confirmar tu compra: el pack completo con los bonus por *$7999*.\n\nDepositás al alias *ofiprof.mp*, nos enviás el comprobante y te pasamos el link con todo el material.",
-  "Te dejo una oportunidad para confirmar tu compra: el pack completo con los bonus por *$7999*. Depositás al alias *ofiprof.mp*, nos enviás el comprobante y te pasamos el link con todo el material.",
-  "Te dejo una oportunidad para confirmar tu compra: solo por hoy el pack completo queda en *$4999* y antes estaba *$26999*. Depositás al alias *ofiprof.mp* a nombre de *Nicolás Stamm*, nos enviás el comprobante y te pasamos el link con todo el material.",
-]);
-migrateDefaultSetting("product_delivery_text", DEFAULT_PRODUCT_DELIVERY_TEXT, [
-  `Pago confirmado ✅
-
-Te dejo el acceso al material del *Kit Yoga Pro*:
-{{product_access_url}}
-
-Cualquier cosa, escribime por acá.`,
-]);
-migrateDefaultSetting("ask_name_text", DEFAULT_ASK_NAME_TEXT, [
-  LEGACY_ASK_NAME_TEXT,
-  "¡Hola! 👋 ¿Cómo te llamás?",
-]);
-migrateDefaultSetting("reminder2_offer_text", DEFAULT_REMINDER2_OFFER_TEXT, []);
-
-for (const key of ["master_prompt", "followup_text", "first_reply_prompt", "next_reply_prompt"]) {
-  replaceSettingText(key, "ofiprof.mp", "kit.yogapro");
-}
-
-// Price migration: $4.999 → $14.999 in all relevant settings
-for (const key of ["master_prompt", "followup_text", "next_reply_prompt"]) {
-  replaceSettingText(key, "$4.999", "$14.999");
-  replaceSettingText(key, "$4999", "$14999");
-}
-replaceSettingText("master_prompt", "Solo por hoy $4.999", "Solo por hoy $14.999");
-replaceSettingText("master_prompt", "siempre usá $4.999", "siempre usá $14.999");
-replaceSettingText("next_reply_prompt", "siempre decí $4.999", "siempre decí $14.999");
-
-// Bombazo price migration: catch ALL variants of 4999 → 6999
-replaceSettingText("flash_offer_text", "$4.999", "$6.999");
-replaceSettingText("flash_offer_text", "$4999", "$6999");
-replaceSettingText("flash_offer_text", "4.999", "6.999");
-replaceSettingText("flash_offer_text", "4999", "6999");
-
-// INFO_PAYMENT_TEXT price migration
-replaceSettingText("master_prompt", "respondiendo por WhatsApp a leads", "respondiendo por chat a leads");
-replaceSettingText("first_reply_prompt", "tono humano de WhatsApp", "tono humano de chat");
-replaceSettingText("next_reply_prompt", "tono humano de WhatsApp", "tono humano de chat");
-
-updateSettings({ followup_enabled: "false" });
-clearAllScheduledFollowUps();
-db.prepare("UPDATE contacts SET reminder_scheduled_at = NULL WHERE reminder_scheduled_at IS NOT NULL").run();
-
-db.prepare(
-  `UPDATE contacts
-   SET greeting_audio_sent = 1
-   WHERE greeting_audio_sent = 0
-     AND phone_number IN (
-       SELECT phone_number
-       FROM messages
-        WHERE role = 'assistant'
-          AND content IN ('¿Querés que te cuente sobre el Kit Yoga Pro?', 'Querés que te cuente sobre el Kit Yoga Pro?')
-      )`
-).run();
 
 function nowIso() {
   return new Date().toISOString();
@@ -1097,9 +901,8 @@ export function clearHistory(phoneNumber) {
          handoff_reason = '',
          handoff_last_message = '',
          greeting_sent = 0,
-          greeting_audio_sent = 0,
-          material_preview_offered = 0,
-          material_video_sent = 0,
+           greeting_audio_sent = 0,
+           payment_alias_sent = 0,
           name = '',
           name_asked = 0,
           promo_scheduled_at = NULL,
@@ -1123,6 +926,11 @@ export function claimInitialOffer(phoneNumber) {
   return result.changes === 1;
 }
 
+export function releaseInitialOfferClaim(phoneNumber) {
+  ensureContact(phoneNumber);
+  db.prepare("UPDATE contacts SET greeting_sent = 0, updated_at = ? WHERE phone_number = ?").run(nowIso(), phoneNumber);
+}
+
 export function hasGreetingBeenSent(phoneNumber) {
   return Boolean(getContact(phoneNumber).greeting_sent);
 }
@@ -1139,34 +947,16 @@ export function hasGreetingAudioBeenSent(phoneNumber) {
   return Boolean(getContact(phoneNumber).greeting_audio_sent);
 }
 
-export function markMaterialPreviewOffered(phoneNumber) {
+export function markPaymentAliasSent(phoneNumber) {
   ensureContact(phoneNumber);
-  db.prepare("UPDATE contacts SET material_preview_offered = 1, updated_at = ? WHERE phone_number = ?").run(
+  db.prepare("UPDATE contacts SET payment_alias_sent = 1, updated_at = ? WHERE phone_number = ?").run(
     nowIso(),
     phoneNumber
   );
 }
 
-export function hasMaterialPreviewBeenOffered(phoneNumber) {
-  return Boolean(getContact(phoneNumber).material_preview_offered);
-}
-
-export function markMaterialVideoSent(phoneNumber) {
-  ensureContact(phoneNumber);
-  const now = nowIso();
-  db.prepare("UPDATE contacts SET material_video_sent = 1, material_video_sent_at = COALESCE(material_video_sent_at, ?), updated_at = ? WHERE phone_number = ?").run(
-    now,
-    now,
-    phoneNumber
-  );
-}
-
-export function hasMaterialVideoBeenSent(phoneNumber) {
-  return Boolean(getContact(phoneNumber).material_video_sent);
-}
-
-export function getMaterialVideoSentAt(phoneNumber) {
-  return getContact(phoneNumber).material_video_sent_at || "";
+export function hasPaymentAliasBeenSent(phoneNumber) {
+  return Boolean(getContact(phoneNumber).payment_alias_sent);
 }
 
 export function saveContactName(phoneNumber, name) {
@@ -1196,6 +986,35 @@ export function getContactName(phoneNumber) {
 
 export function deleteContact(phoneNumber) {
   db.prepare("DELETE FROM contacts WHERE phone_number = ?").run(phoneNumber);
+}
+
+export function listContactHistoryForExport() {
+  return db.prepare(
+    `SELECT COALESCE(name, '') AS name,
+            phone_number AS phoneNumber
+     FROM contacts
+     WHERE channel = 'whatsapp'
+       AND phone_number != ''
+     ORDER BY created_at ASC, phone_number ASC`
+  ).all().map((row) => ({ name: row.name, phoneNumber: row.phoneNumber }));
+}
+
+export function purgeContactHistory() {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const contacts = db.prepare("SELECT COUNT(*) AS count FROM contacts").get().count;
+    const messages = db.prepare("SELECT COUNT(*) AS count FROM messages").get().count;
+    const payments = db.prepare("SELECT COUNT(*) AS count FROM payments").get().count;
+    const conversionEvents = db.prepare("SELECT COUNT(*) AS count FROM meta_conversion_events").get().count;
+
+    db.prepare("DELETE FROM meta_conversion_events").run();
+    db.prepare("DELETE FROM contacts").run();
+    db.exec("COMMIT");
+    return { contacts, messages, payments, conversionEvents };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function requestHumanHandoff(phoneNumber, details = {}) {
@@ -1262,8 +1081,8 @@ export function recordPayment(phoneNumber, details = {}) {
   const paidAt = details.paidAt ?? now;
   const amount = Math.max(0, Number.parseInt(details.amount ?? 0, 10) || 0);
   const discount = Math.max(0, Number.parseInt(details.discount ?? 0, 10) || 0);
-  const productCode = String(details.productCode ?? "base").trim() || "base";
-  const productName = String(details.productName ?? "Kit Yoga Pro").trim() || "Kit Yoga Pro";
+  const productCode = String(details.productCode ?? CURRENT_PRODUCT_CODE).trim() || CURRENT_PRODUCT_CODE;
+  const productName = String(details.productName ?? "Fantasía Color PRO").trim() || "Fantasía Color PRO";
   const note = String(details.note ?? "").trim();
   const contactKey = db.prepare("SELECT contact_key AS contactKey FROM contacts WHERE phone_number = ?").get(phoneNumber)?.contactKey
     ?? normalizeContactKey(phoneNumber, details.accountId);
@@ -1302,10 +1121,10 @@ export function reverseLatestPayment(phoneNumber) {
     const remaining = db.prepare(
       `SELECT paid_at AS paidAt
        FROM payments
-       WHERE phone_number = ?
+       WHERE phone_number = ? AND product_code = ?
        ORDER BY paid_at DESC, id DESC
        LIMIT 1`
-    ).get(contact);
+    ).get(contact, CURRENT_PRODUCT_CODE);
     db.prepare(
       `UPDATE contacts
        SET paid = ?,
@@ -2087,7 +1906,7 @@ export function markReminder2Sent(phoneNumber) {
   ).run(nowIso(), nowIso(), phoneNumber);
 }
 
-export function markProductReleased(phoneNumber) {
+export function markManualOfferSent(phoneNumber) {
   ensureContact(phoneNumber);
   db.prepare(
     `UPDATE contacts

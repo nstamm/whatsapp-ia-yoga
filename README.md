@@ -1,4 +1,4 @@
-# Ofiprof Yoga Sales Bot
+# Ofiprof Fantasía Color PRO Sales Bot
 
 Production chatbot for WhatsApp, Instagram, and Facebook leads. It combines OpenAI responses, Zernio messaging, a persistent SQLite CRM, payment delivery, reminders, Meta Ads attribution, and an authenticated operational dashboard.
 
@@ -28,7 +28,7 @@ Useful URLs:
 - Multi-channel identity handling for WhatsApp, Instagram, and Facebook.
 - OpenAI chat responses, audio transcription, name capture, and payment-proof analysis.
 - Persistent conversation history, payments, handoffs, reminders, and settings in SQLite.
-- Media delivery for product images, voice notes, and video material.
+- Greeting voice-note delivery and a standalone landing message prepared for WhatsApp Open Graph previews.
 - Human handoff and post-payment product delivery.
 - Meta Ads timelines, attribution, conversion reporting, and profitability metrics.
 - Visual `Flujo` panel with editable prompts/messages and media previews.
@@ -125,7 +125,8 @@ Create local persistence directories and configure `.env`:
 
 ```bash
 mkdir -p data backups
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose ps
 ```
 

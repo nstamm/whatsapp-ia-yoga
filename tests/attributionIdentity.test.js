@@ -6,7 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 test("canonical contact keys preserve attribution across phone formats", async () => {
-  const dataDir = mkdtempSync(path.join(tmpdir(), "yoga-attribution-"));
+  const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-attribution-"));
   process.env.CRM_DATA_DIR = dataDir;
   const store = await import(`../src/store.js?attribution=${Date.now()}`);
   const plusPhone = "+5491112345678";
@@ -19,13 +19,13 @@ test("canonical contact keys preserve attribution across phone formats", async (
   store.saveContactCtwaAttribution(plusPhone, { ctwaSourceId: "ad-123", ctwaCapturedAt: capturedAt });
   store.saveContactCtwaAttribution(plusPhone, { ctwaSourceId: "ad-456", ctwaCapturedAt: "2026-07-20T12:00:00.000Z" });
   store.addMessage(barePhone, "user", "Quiero información");
-  store.recordPayment(barePhone, { amount: 4999, paidAt: capturedAt });
+  store.recordPayment(barePhone, { amount: 16999, paidAt: capturedAt });
 
   const conversations = store.listCtwaAttributedConversations({ from: "2026-07-16", to: "2026-07-16" });
   assert.equal(conversations.length, 1);
   assert.equal(conversations[0].phoneNumber, plusPhone);
   assert.equal(conversations[0].leadReplyCount, 1);
-  assert.equal(conversations[0].paymentTotal, 4999);
+  assert.equal(conversations[0].paymentTotal, 16999);
   assert.equal(conversations[0].ctwaCapturedAt, capturedAt);
 
   const payments = store.listCtwaAttributedPayments({ from: "2026-07-16", to: "2026-07-16" });
@@ -41,7 +41,7 @@ test("canonical contact keys preserve attribution across phone formats", async (
   const socialKey = db.prepare("SELECT contact_key AS contactKey FROM contacts WHERE phone_number = 'ig:legacy-user'").get().contactKey;
   store.getHistory("ig:legacy-user");
   store.addMessage("ig:legacy-user", "user", "Hola", { accountId: "account-1" });
-  store.recordPayment("ig:legacy-user", { amount: 4999 });
+  store.recordPayment("ig:legacy-user", { amount: 16999 });
   assert.equal(db.prepare("SELECT contact_key AS contactKey FROM contacts WHERE phone_number = 'ig:legacy-user'").get().contactKey, socialKey);
   assert.equal(db.prepare("SELECT contact_key AS contactKey FROM messages WHERE phone_number = 'ig:legacy-user'").get().contactKey, socialKey);
   assert.equal(db.prepare("SELECT contact_key AS contactKey FROM payments WHERE phone_number = 'ig:legacy-user'").get().contactKey, socialKey);

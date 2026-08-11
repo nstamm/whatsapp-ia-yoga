@@ -28,7 +28,7 @@ test("every editable flow setting is represented by exactly one node", () => {
 test("flow keeps all core runtime stages visible", () => {
   const nodeIds = new Set(CONVERSATION_FLOW.nodes.map((node) => node.id));
   const requiredStages = [
-    "incoming", "routing", "greeting", "product", "preview", "downsell23h",
+    "incoming", "routing", "greeting", "landing", "alias", "product", "downsell23h",
     "payment", "attribution-recovery", "delivery", "paid", "manual", "handoff",
   ];
 
@@ -49,21 +49,13 @@ test("incoming flow documents account-scoped social identities", () => {
   assert.match(incoming.description, /identidades sociales por cuenta/i);
 });
 
-test("flow exposes only the greeting audio and material video", () => {
+test("flow exposes only the greeting audio", () => {
   const flow = buildConversationFlow();
-  const expectedMedia = {
-    greeting: ["/media/audios/saludo.mp3"],
-    preview: ["/media/videomaterial.mp4"],
-  };
+  const greeting = flow.nodes.find((item) => item.id === "greeting");
+  assert.deepEqual(greeting.media.map((item) => item.src), ["/media/audios/saludo.mp3"]);
 
-  for (const [nodeId, sources] of Object.entries(expectedMedia)) {
-    const node = flow.nodes.find((item) => item.id === nodeId);
-    assert.deepEqual(node.media.map((item) => item.src), sources);
-    assert.ok(node.media.every((item) => ["audio", "video", "image"].includes(item.type)));
-  }
-
-  const audioMedia = flow.nodes.flatMap((node) => node.media ?? []).filter((item) => item.type === "audio");
-  assert.deepEqual(audioMedia.map((item) => item.src), ["/media/audios/saludo.mp3"]);
+  const allMedia = flow.nodes.flatMap((node) => node.media ?? []);
+  assert.deepEqual(allMedia.map((item) => item.src), ["/media/audios/saludo.mp3"]);
 });
 
 test("flow exposes current setting values on editable nodes", () => {
@@ -96,6 +88,7 @@ test("flow rejects an empty initial offer", () => {
 
 test("flow settings validate URL and token boundaries", () => {
   assert.equal(validateFlowSettings({ product_access_url: "http://inseguro.test" }).ok, false);
+  assert.equal(validateFlowSettings({ product_landing_url: "https://fantasia.ofiprof.com" }).ok, true);
   assert.equal(validateFlowSettings({ openai_max_tokens: 59 }).ok, false);
   assert.equal(validateFlowSettings({ openai_max_tokens: 800 }).ok, true);
 });
