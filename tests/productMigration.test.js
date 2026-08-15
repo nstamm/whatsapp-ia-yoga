@@ -164,3 +164,27 @@ Texto personalizado después`.replaceAll("\n", "\r\n");
   const retriedStore = await import(`../src/store.js?offer-copy-retry=${Date.now()}`);
   assert.equal(retriedStore.getSetting("initial_offer_text"), offer);
 });
+
+test("recovery flow migration installs the discount funnel without overwriting custom reminder copy", async () => {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-recovery-flow-"));
+  process.env.CRM_DATA_DIR = dataDir;
+  await import(`../src/store.js?recovery-flow-setup=${Date.now()}`);
+  const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
+  db.prepare("UPDATE settings SET value = 'legacy-recovery' WHERE key = 'recovery_flow_version'").run();
+  db.prepare("UPDATE settings SET value = 'Recordatorio personalizado' WHERE key = 'reminder2_offer_text'").run();
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'master_prompt'").run(
+    "Regla.\n- Si mencionás precio, siempre usá $16.999 por WhatsApp."
+  );
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'next_reply_prompt'").run(
+    "Respondé breve. Si mencionás precio, usá $16.999 por WhatsApp."
+  );
+  db.close();
+
+  const migratedStore = await import(`../src/store.js?recovery-flow-run=${Date.now()}`);
+  assert.equal(migratedStore.getSetting("reminder2_offer_text"), "Recordatorio personalizado");
+  assert.match(migratedStore.getSetting("exclusive_offer_text"), /\*\$9\.999\*/);
+  assert.match(migratedStore.getSetting("final_discount_text"), /\*\$6\.999\*/);
+  assert.match(migratedStore.getSetting("master_prompt"), /último precio que el sistema ya ofreció/);
+  assert.match(migratedStore.getSetting("next_reply_prompt"), /último precio que el sistema ya ofreció/);
+  assert.equal(migratedStore.getSetting("recovery_flow_version"), "fantasia-recovery-v1");
+});

@@ -13,7 +13,7 @@ import { consumeInboxConversationPages, shouldProcessCtwaBackfillConversation, s
 import { BUSINESS_TIME_ZONE, businessDateKey as localDateKey, parseBusinessDateKey as parseDateKey, shiftBusinessDateKey as shiftDateKey } from "./businessDate.js";
 import { buildConversationFlow, validateFlowSettings } from "./conversationFlow.js";
 import { contactHistoryCsv } from "./contactExport.js";
-import { hasCommercialPaymentContext, initialOfferTextChunks, shouldAutoProcessPaymentAttachment } from "./conversationPolicy.js";
+import { hasCommercialPaymentContext, initialOfferTextChunks, shouldActivateExclusiveOffer, shouldAutoProcessPaymentAttachment } from "./conversationPolicy.js";
 import { adminSectionDataNeeds, buildAdminConversationQuery, createAsyncTtlCache, isFreshTimestamp, isValidDateKey, mapWithConcurrency } from "./adminPerformance.js";
 import { DEFAULT_META_AD_ACCOUNT_NAME, hasMetaAdsActivity, metaSpendInArs, primaryMetaAdAccountId, selectPrimaryMetaAdAccount, shouldReplaceLegacyMetaAdsMetrics } from "./metaAdsPolicy.js";
 import { observeMetric, performanceSnapshot } from "./performanceMetrics.js";
@@ -67,6 +67,15 @@ import {
   listDueReminder2s,
   claimDueReminder2,
   markReminder2Sent,
+  listDueFinalDiscounts,
+  claimDueFinalDiscount,
+  markFinalDiscountSent,
+  acceptExclusiveOfferResponse,
+  claimExclusiveOffer,
+  releaseExclusiveOffer,
+  markExclusiveOfferTextSent,
+  markExclusiveAliasNoteSent,
+  markExclusiveAliasSent,
   markManualOfferSent,
   saveContactCtwaAttribution,
   listCtwaAttributedConversations,
@@ -891,6 +900,37 @@ async function processDueDownsellsImpl() {
 
 function processDueDownsells() {
   return trackContactOperation(processDueDownsellsImpl);
+}
+
+async function processDueFinalDiscountsImpl() {
+  const due = listDueFinalDiscounts();
+  for (const contact of due) {
+    if (!claimDueFinalDiscount(contact.phone_number)) continue;
+    const freshContact = getContact(contact.phone_number);
+    if (freshContact.paid || freshContact.handoff) continue;
+    if (!contact.conversation_id) {
+      console.warn(`⚠️ Final discount skipped for ${contact.phone_number}: missing conversationId`);
+      continue;
+    }
+    try {
+      const text = getSetting("final_discount_text", "").trim();
+      if (!text) continue;
+      await sendReminderText(contact, text, zernioOptionsFor(contact), "final discount");
+      markFinalDiscountSent(contact.phone_number);
+      console.log(`📣 Final $6.999 discount sent to ${contact.phone_number}`);
+    } catch (err) {
+      if (isPermanentReminderSendError(err)) {
+        markFinalDiscountSent(contact.phone_number);
+        console.warn(`⏭️ Final discount stopped for ${contact.phone_number}: ${err.message}`);
+        continue;
+      }
+      console.error(`❌ Error sending final discount to ${contact.phone_number}; automatic retry disabled:`, err.message);
+    }
+  }
+}
+
+function processDueFinalDiscounts() {
+  return trackContactOperation(processDueFinalDiscountsImpl);
 }
 
 function buildProductDeliveryText() {
@@ -3936,6 +3976,8 @@ function renderAdminPage(req, context = {}) {
               <label class="wide">Presentación del titular<input name="payment_alias_note" value="${escapeHtml(settings.payment_alias_note ?? "")}"></label>
               <label class="wide">Instrucciones después del alias<textarea name="payment_instructions_text">${escapeHtml(settings.payment_instructions_text ?? "")}</textarea></label>
               <label class="wide">Recordatorio 23h<textarea name="reminder2_offer_text">${escapeHtml(settings.reminder2_offer_text ?? "")}</textarea></label>
+              <label class="wide">Oferta exclusiva por respuesta<textarea name="exclusive_offer_text">${escapeHtml(settings.exclusive_offer_text ?? "")}</textarea></label>
+              <label class="wide">Descuento final 23h<textarea name="final_discount_text">${escapeHtml(settings.final_discount_text ?? "")}</textarea></label>
               <label class="wide">Oferta manual<textarea name="flash_offer_text">${escapeHtml(settings.flash_offer_text ?? "")}</textarea></label>
               <label class="wide">Link de acceso al producto<input name="product_access_url" value="${escapeHtml(settings.product_access_url)}"></label>
               <label class="wide">Mensaje de entrega post-pago<textarea name="product_delivery_text">${escapeHtml(settings.product_delivery_text)}</textarea></label>
@@ -4500,6 +4542,8 @@ app.post("/admin/settings", requireAdmin, (req, res) => {
     payment_alias_note: String(req.body.payment_alias_note ?? "").trim() || getSetting("payment_alias_note"),
     payment_instructions_text: String(req.body.payment_instructions_text ?? "").trim() || getSetting("payment_instructions_text"),
     reminder2_offer_text: req.body.reminder2_offer_text ?? "",
+    exclusive_offer_text: String(req.body.exclusive_offer_text ?? "").trim() || getSetting("exclusive_offer_text"),
+    final_discount_text: String(req.body.final_discount_text ?? "").trim() || getSetting("final_discount_text"),
     ask_name_text: req.body.ask_name_text ?? "",
     flash_offer_text: req.body.flash_offer_text ?? "",
     product_access_url: req.body.product_access_url ?? "",
@@ -4577,6 +4621,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
 
   let initialOfferClaimed = false;
   let secondBatchClaimed = false;
+  let exclusiveOfferClaimed = false;
   let finishSecondBatch = null;
   try {
     if (userMessage.trim() === "/clear") {
@@ -4596,6 +4641,11 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
     const contact = getContact(phoneNumber, identity);
     let history = getHistory(phoneNumber);
     let messageForAI = userMessage || "[archivo adjunto]";
+    const awaitingExclusiveOfferResponse = shouldActivateExclusiveOffer(contact, userMessage);
+    const exclusiveOfferPending =
+      !contact.paid &&
+      contact.exclusive_offer_accepted_at &&
+      (!contact.exclusive_offer_text_sent || !contact.exclusive_alias_note_sent || !contact.exclusive_alias_sent);
     const secondBatchPending =
       !contact.paid &&
       hasGreetingBeenSent(phoneNumber) &&
@@ -4620,12 +4670,16 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
       return;
     }
 
-    if (isEmojiOnly(userMessage) && !secondBatchPending) {
+    if (isEmojiOnly(userMessage) && !secondBatchPending && !awaitingExclusiveOfferResponse && !exclusiveOfferPending) {
       console.log(`🏷️ [${phoneNumber}] Emoji-only message, ignoring.`);
       return;
     }
 
-    const hasPaymentContext = hasCommercialPaymentContext(contact, history, hasPaymentAliasBeenSent(phoneNumber));
+    const hasPaymentContext = hasCommercialPaymentContext(
+      contact,
+      history,
+      hasPaymentAliasBeenSent(phoneNumber) || Boolean(contact.exclusive_alias_sent)
+    );
     const isContextualPaymentAttachment = hasPaymentAttachment(message) && hasPaymentContext;
 
     if (!contact.paid && isContextualPaymentAttachment) {
@@ -4643,8 +4697,9 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
         return;
       }
       const product = PAYMENT_PRODUCTS.fantasia;
-      const amount = proofDetails.amount > 0 ? proofDetails.amount : product.amount;
-      const discount = product.discount;
+      const offeredAmount = contact.final_discount_sent_at ? 6999 : contact.exclusive_offer_text_sent ? 9999 : product.amount;
+      const amount = proofDetails.amount > 0 ? proofDetails.amount : offeredAmount;
+      const discount = Math.max(0, product.amount - amount);
       const wasAccessAlreadySent = Boolean(contact.product_link_sent);
 
       const paymentId = recordPayment(phoneNumber, {
@@ -4688,6 +4743,49 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
       addMessage(phoneNumber, "assistant", deliveryText, { conversationId });
       markProductLinkSent(phoneNumber);
       console.log(`📦 Pending product access delivered to ${phoneNumber}`);
+      return;
+    }
+
+    const acceptedExclusiveOffer = awaitingExclusiveOfferResponse;
+
+    if (acceptedExclusiveOffer || exclusiveOfferPending) {
+      addMessage(phoneNumber, "user", messageForAI, { conversationId });
+      if (acceptedExclusiveOffer) {
+        acceptExclusiveOfferResponse(phoneNumber);
+      }
+      if (!claimExclusiveOffer(phoneNumber)) {
+        console.log(`⏭️ Exclusive offer already claimed or completed for ${phoneNumber}`);
+        return;
+      }
+      exclusiveOfferClaimed = true;
+      const freshContact = getContact(phoneNumber);
+
+      if (!freshContact.exclusive_offer_text_sent) {
+        const exclusiveText = getSetting("exclusive_offer_text", "").trim();
+        if (!exclusiveText) throw new Error("exclusive_offer_text is empty");
+        await reply(exclusiveText);
+        addMessage(phoneNumber, "assistant", exclusiveText, { conversationId });
+        markExclusiveOfferTextSent(phoneNumber);
+      }
+      if (!freshContact.exclusive_alias_note_sent) {
+        const aliasNote = getSetting("payment_alias_note", "").trim();
+        if (!aliasNote) throw new Error("payment_alias_note is empty");
+        await sleep(900);
+        await reply(aliasNote);
+        addMessage(phoneNumber, "assistant", aliasNote, { conversationId });
+        markExclusiveAliasNoteSent(phoneNumber);
+      }
+      if (!freshContact.exclusive_alias_sent) {
+        const alias = getSetting("payment_alias", "").trim();
+        if (!alias) throw new Error("payment_alias is empty");
+        await sleep(900);
+        await reply(alias);
+        addMessage(phoneNumber, "assistant", alias, { conversationId });
+        const finalAt = markExclusiveAliasSent(phoneNumber);
+        if (finalAt) console.log(`⏰ Final $6.999 discount scheduled for ${phoneNumber}: ${finalAt}`);
+      }
+      releaseExclusiveOffer(phoneNumber);
+      exclusiveOfferClaimed = false;
       return;
     }
 
@@ -4811,6 +4909,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
   } catch (err) {
     if (initialOfferClaimed) releaseInitialOfferClaim(phoneNumber);
     if (secondBatchClaimed) releaseSecondResponseBatch(phoneNumber);
+    if (exclusiveOfferClaimed) releaseExclusiveOffer(phoneNumber);
     console.error(`❌ Error handling message from ${phoneNumber}:`, err.message);
     try {
       await reply("Perdón, tuve un problema para responder. Probá escribirme de nuevo en un momento 🙏");
@@ -4959,13 +5058,13 @@ app.get("/health", (_, res) => {
 });
 
 setInterval(() => {
-  processDueDownsells().catch((err) => {
+  Promise.all([processDueDownsells(), processDueFinalDiscounts()]).catch((err) => {
     console.error("❌ Reminder worker error:", err.message);
   });
 }, 30_000);
 
 setTimeout(() => {
-  processDueDownsells().catch((err) => {
+  Promise.all([processDueDownsells(), processDueFinalDiscounts()]).catch((err) => {
     console.error("❌ Reminder worker error:", err.message);
   });
 }, 5_000);

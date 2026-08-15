@@ -30,6 +30,7 @@ function measuredGet(name, statement, params = []) {
 const PRODUCT_CONFIG_VERSION = "fantasia-v1";
 const SECOND_BATCH_CONFIG_VERSION = "fantasia-second-batch-v2";
 const OFFER_COPY_VERSION = "fantasia-offer-copy-v2";
+const RECOVERY_FLOW_VERSION = "fantasia-recovery-v1";
 const CURRENT_PRODUCT_CODE = "fantasia-color-pro";
 
 const DEFAULT_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
@@ -49,7 +50,7 @@ Flujo comercial:
 - Enfocá los beneficios en variedad, calidad de impresión, actividades sin pantallas, aprendizaje, creatividad y tiempo en familia.
 - Si preguntan si incluye una serie, personaje, temática o dibujo específico, respondé siempre que sí está incluido y ofrecé ayudar a encontrarlo dentro de la biblioteca.
 - No inventes precios, descuentos, cuotas, garantías, fechas, stock, plataformas ni medios de pago.
-- Si mencionás precio, siempre usá $16.999 por WhatsApp.
+- Si mencionás precio, usá el último precio que el sistema ya ofreció en la conversación; si todavía no envió un descuento, usá $16.999 por WhatsApp.
 - No escribas el alias pagos.ofiprof; el sistema lo envía por separado.
 - Si la persona dice que pagó o manda comprobante, no sigas vendiendo.
 - El acceso se entrega después de confirmar el pago.
@@ -67,7 +68,7 @@ const DEFAULT_FIRST_REPLY_PROMPT =
   "Primer mensaje útil de IA después de la información inicial: respondé en 1 o 2 líneas según la duda. Si preguntan por una serie, personaje o temática, confirmá que sí está incluido. No repitas toda la oferta ni el alias.";
 
 const DEFAULT_NEXT_REPLY_PROMPT =
-  "Ya hay conversación previa. Respondé como persona real en 1 o 2 líneas. Si preguntan por una serie, personaje, temática o dibujo, confirmá que sí está incluido. No repitas toda la presentación salvo que la pidan. Si mencionás precio, usá $16.999 por WhatsApp. No escribas el alias porque el sistema lo manda separado.";
+  "Ya hay conversación previa. Respondé como persona real en 1 o 2 líneas. Si preguntan por una serie, personaje, temática o dibujo, confirmá que sí está incluido. No repitas toda la presentación salvo que la pidan. Si mencionás precio, usá el último precio que el sistema ya ofreció; si no hay descuento enviado, usá $16.999 por WhatsApp. No escribas el alias porque el sistema lo manda separado.";
 
 const DEFAULT_FOLLOWUP_TEXT =
   `Te libero el acceso a Fantasía Color PRO:
@@ -97,11 +98,17 @@ const DEFAULT_PRODUCT_LANDING_TEXT = `Si querés ver más detalles y algunas mue
 
 Si me das el ok, te mando un video para que veas el material.`;
 
-const DEFAULT_REMINDER2_OFFER_TEXT = `Hola! Te escribo por *Fantasía Color PRO* ✨
+const DEFAULT_REMINDER2_OFFER_TEXT = `Hola! Pudiste ver el material de *Fantasía Color PRO*? ✨
 
-La oferta exclusiva por WhatsApp sigue disponible a *$16.999*.
+Si querés que te pase una oferta exclusiva, respondeme *OK* y te la envío 🙌`;
 
-Tenés más de 100 libros, imprimibles educativos, juegos y actividades para chicos. Si querés aprovecharla, respondeme por acá.`;
+const DEFAULT_EXCLUSIVE_OFFER_TEXT = `Te dejo una oferta exclusiva para que puedas aprovechar *Fantasía Color PRO* 🙌
+
+Te lo dejamos a *$9.999* en un único pago.`;
+
+const DEFAULT_FINAL_DISCOUNT_TEXT = `No quiero que el dinero sea un problema para que puedas tener *Fantasía Color PRO* 💛
+
+Como descuento final, te lo dejamos a *$6.999* en un único pago. Si querés aprovecharlo, escribime por acá.`;
 
 const DEFAULT_PAID_REPLY_PROMPT =
   "Esta persona ya compró Fantasía Color PRO. Respondé como soporte post-compra en 1 o 2 líneas, tono humano y sin signos de apertura. Ayudá con acceso, descarga, impresión o uso de los archivos. No vendas ni repitas precios.";
@@ -135,6 +142,8 @@ const PRODUCT_DEFAULT_SETTINGS = {
   followup_text: DEFAULT_FOLLOWUP_TEXT,
   initial_offer_text: DEFAULT_INITIAL_OFFER_TEXT,
   reminder2_offer_text: DEFAULT_REMINDER2_OFFER_TEXT,
+  exclusive_offer_text: DEFAULT_EXCLUSIVE_OFFER_TEXT,
+  final_discount_text: DEFAULT_FINAL_DISCOUNT_TEXT,
   paid_reply_prompt: DEFAULT_PAID_REPLY_PROMPT,
   flash_offer_text: DEFAULT_FLASH_OFFER_TEXT,
   ask_name_text: DEFAULT_ASK_NAME_TEXT,
@@ -192,6 +201,14 @@ db.exec(`
     reminder2_scheduled_at TEXT,
     reminder2_attempted_at TEXT,
     reminder2_sent_at TEXT,
+    exclusive_offer_accepted_at TEXT,
+    exclusive_offer_text_sent INTEGER NOT NULL DEFAULT 0,
+    exclusive_alias_note_sent INTEGER NOT NULL DEFAULT 0,
+    exclusive_alias_sent INTEGER NOT NULL DEFAULT 0,
+    exclusive_offer_claimed INTEGER NOT NULL DEFAULT 0,
+    final_discount_scheduled_at TEXT,
+    final_discount_attempted_at TEXT,
+    final_discount_sent_at TEXT,
     payment_alias_sent INTEGER NOT NULL DEFAULT 0,
     payment_alias_note_sent INTEGER NOT NULL DEFAULT 0,
     payment_instructions_sent INTEGER NOT NULL DEFAULT 0,
@@ -331,6 +348,14 @@ const contactMigrations = [
   ["reminder2_scheduled_at", "ALTER TABLE contacts ADD COLUMN reminder2_scheduled_at TEXT"],
   ["reminder2_attempted_at", "ALTER TABLE contacts ADD COLUMN reminder2_attempted_at TEXT"],
   ["reminder2_sent_at", "ALTER TABLE contacts ADD COLUMN reminder2_sent_at TEXT"],
+  ["exclusive_offer_accepted_at", "ALTER TABLE contacts ADD COLUMN exclusive_offer_accepted_at TEXT"],
+  ["exclusive_offer_text_sent", "ALTER TABLE contacts ADD COLUMN exclusive_offer_text_sent INTEGER NOT NULL DEFAULT 0"],
+  ["exclusive_alias_note_sent", "ALTER TABLE contacts ADD COLUMN exclusive_alias_note_sent INTEGER NOT NULL DEFAULT 0"],
+  ["exclusive_alias_sent", "ALTER TABLE contacts ADD COLUMN exclusive_alias_sent INTEGER NOT NULL DEFAULT 0"],
+  ["exclusive_offer_claimed", "ALTER TABLE contacts ADD COLUMN exclusive_offer_claimed INTEGER NOT NULL DEFAULT 0"],
+  ["final_discount_scheduled_at", "ALTER TABLE contacts ADD COLUMN final_discount_scheduled_at TEXT"],
+  ["final_discount_attempted_at", "ALTER TABLE contacts ADD COLUMN final_discount_attempted_at TEXT"],
+  ["final_discount_sent_at", "ALTER TABLE contacts ADD COLUMN final_discount_sent_at TEXT"],
   ["payment_alias_sent", "ALTER TABLE contacts ADD COLUMN payment_alias_sent INTEGER NOT NULL DEFAULT 0"],
   ["payment_alias_note_sent", "ALTER TABLE contacts ADD COLUMN payment_alias_note_sent INTEGER NOT NULL DEFAULT 0"],
   ["payment_instructions_sent", "ALTER TABLE contacts ADD COLUMN payment_instructions_sent INTEGER NOT NULL DEFAULT 0"],
@@ -410,6 +435,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_contacts_attribution_date ON contacts(attribution_at, contact_key) WHERE ctwa_source_id != '';
   CREATE INDEX IF NOT EXISTS idx_contacts_reminder_due ON contacts(reminder_scheduled_at) WHERE reminder_sent_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_contacts_reminder2_due ON contacts(reminder2_scheduled_at) WHERE reminder2_sent_at IS NULL;
+  CREATE INDEX IF NOT EXISTS idx_contacts_final_discount_due ON contacts(final_discount_scheduled_at) WHERE final_discount_sent_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_contacts_reminder_claimable ON contacts(reminder_scheduled_at) WHERE reminder_sent_at IS NULL AND reminder_attempted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_contacts_reminder2_claimable ON contacts(reminder2_scheduled_at) WHERE reminder2_sent_at IS NULL AND reminder2_attempted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_messages_phone_id ON messages(phone_number, id);
@@ -429,6 +455,41 @@ db.exec("COMMIT");
 
 for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run(key, value);
+}
+
+const storedRecoveryFlowVersion = db.prepare("SELECT value FROM settings WHERE key = 'recovery_flow_version'").get()?.value;
+if (storedRecoveryFlowVersion !== RECOVERY_FLOW_VERSION) {
+  db.prepare(
+    "UPDATE settings SET value = ? WHERE key = 'reminder2_offer_text' AND value = ?"
+  ).run(
+    DEFAULT_REMINDER2_OFFER_TEXT,
+    `Hola! Te escribo por *Fantasía Color PRO* ✨
+
+La oferta exclusiva por WhatsApp sigue disponible a *$16.999*.
+
+Tenés más de 100 libros, imprimibles educativos, juegos y actividades para chicos. Si querés aprovecharla, respondeme por acá.`
+  );
+  db.prepare(
+    `UPDATE settings
+     SET value = replace(
+       value,
+       '- Si mencionás precio, siempre usá $16.999 por WhatsApp.',
+       '- Si mencionás precio, usá el último precio que el sistema ya ofreció en la conversación; si todavía no envió un descuento, usá $16.999 por WhatsApp.'
+     )
+     WHERE key = 'master_prompt'`
+  ).run();
+  db.prepare(
+    `UPDATE settings
+     SET value = replace(
+       value,
+       'Si mencionás precio, usá $16.999 por WhatsApp.',
+       'Si mencionás precio, usá el último precio que el sistema ya ofreció; si no hay descuento enviado, usá $16.999 por WhatsApp.'
+     )
+     WHERE key = 'next_reply_prompt'`
+  ).run();
+  db.prepare(
+    "INSERT INTO settings (key, value) VALUES ('recovery_flow_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+  ).run(RECOVERY_FLOW_VERSION);
 }
 
 const storedOfferCopyVersion = db.prepare("SELECT value FROM settings WHERE key = 'offer_copy_version'").get()?.value;
@@ -499,6 +560,7 @@ if (storedSecondBatchVersion !== SECOND_BATCH_CONFIG_VERSION) {
   ).run(SECOND_BATCH_CONFIG_VERSION);
 }
 db.prepare("UPDATE contacts SET second_batch_claimed = 0 WHERE second_batch_claimed != 0").run();
+db.prepare("UPDATE contacts SET exclusive_offer_claimed = 0 WHERE exclusive_offer_claimed != 0").run();
 
 const storedProductVersion = db.prepare("SELECT value FROM settings WHERE key = 'product_config_version'").get()?.value;
 if (storedProductVersion !== PRODUCT_CONFIG_VERSION) {
@@ -529,6 +591,14 @@ if (storedProductVersion !== PRODUCT_CONFIG_VERSION) {
            reminder2_scheduled_at = NULL,
            reminder2_attempted_at = NULL,
            reminder2_sent_at = NULL,
+           exclusive_offer_accepted_at = NULL,
+           exclusive_offer_text_sent = 0,
+           exclusive_alias_note_sent = 0,
+           exclusive_alias_sent = 0,
+           exclusive_offer_claimed = 0,
+           final_discount_scheduled_at = NULL,
+           final_discount_attempted_at = NULL,
+           final_discount_sent_at = NULL,
            payment_alias_sent = 0,
            payment_alias_note_sent = 0,
            payment_instructions_sent = 0,
@@ -1008,7 +1078,15 @@ export function clearHistory(phoneNumber) {
           reminder_sent_at = NULL,
           reminder2_scheduled_at = NULL,
           reminder2_attempted_at = NULL,
-          reminder2_sent_at = NULL,
+           reminder2_sent_at = NULL,
+           exclusive_offer_accepted_at = NULL,
+           exclusive_offer_text_sent = 0,
+           exclusive_alias_note_sent = 0,
+           exclusive_alias_sent = 0,
+           exclusive_offer_claimed = 0,
+           final_discount_scheduled_at = NULL,
+           final_discount_attempted_at = NULL,
+           final_discount_sent_at = NULL,
           updated_at = ?
      WHERE phone_number = ?`
   ).run(nowIso(), phoneNumber);
@@ -1125,6 +1203,73 @@ export function releaseSecondResponseBatch(phoneNumber) {
   );
 }
 
+export function acceptExclusiveOfferResponse(phoneNumber, date = new Date()) {
+  ensureContact(phoneNumber);
+  const acceptedAt = date.toISOString();
+  const result = db.prepare(
+    `UPDATE contacts
+     SET exclusive_offer_accepted_at = ?,
+         updated_at = ?
+     WHERE phone_number = ?
+       AND paid = 0
+       AND handoff = 0
+       AND reminder2_sent_at IS NOT NULL
+       AND exclusive_offer_accepted_at IS NULL`
+  ).run(acceptedAt, acceptedAt, phoneNumber);
+  return result.changes === 1 ? acceptedAt : null;
+}
+
+export function claimExclusiveOffer(phoneNumber) {
+  ensureContact(phoneNumber);
+  const result = db.prepare(
+    `UPDATE contacts
+     SET exclusive_offer_claimed = 1, updated_at = ?
+     WHERE phone_number = ?
+       AND paid = 0
+       AND handoff = 0
+       AND exclusive_offer_accepted_at IS NOT NULL
+       AND exclusive_offer_claimed = 0
+       AND (exclusive_offer_text_sent = 0 OR exclusive_alias_note_sent = 0 OR exclusive_alias_sent = 0)`
+  ).run(nowIso(), phoneNumber);
+  return result.changes === 1;
+}
+
+export function releaseExclusiveOffer(phoneNumber) {
+  ensureContact(phoneNumber);
+  db.prepare("UPDATE contacts SET exclusive_offer_claimed = 0, updated_at = ? WHERE phone_number = ?").run(nowIso(), phoneNumber);
+}
+
+export function markExclusiveOfferTextSent(phoneNumber) {
+  ensureContact(phoneNumber);
+  db.prepare("UPDATE contacts SET exclusive_offer_text_sent = 1, updated_at = ? WHERE phone_number = ?").run(nowIso(), phoneNumber);
+}
+
+export function markExclusiveAliasNoteSent(phoneNumber) {
+  ensureContact(phoneNumber);
+  db.prepare("UPDATE contacts SET exclusive_alias_note_sent = 1, updated_at = ? WHERE phone_number = ?").run(nowIso(), phoneNumber);
+}
+
+export function markExclusiveAliasSent(phoneNumber) {
+  ensureContact(phoneNumber);
+  const contact = getContact(phoneNumber);
+  const finalDiscountAt = contact.exclusive_offer_accepted_at
+    ? computeDownsellDate(new Date(contact.exclusive_offer_accepted_at)).toISOString()
+    : null;
+  const now = nowIso();
+  db.prepare(
+    `UPDATE contacts
+     SET exclusive_alias_sent = 1,
+         final_discount_scheduled_at = CASE
+           WHEN final_discount_sent_at IS NULL THEN COALESCE(final_discount_scheduled_at, ?)
+           ELSE final_discount_scheduled_at
+         END,
+         final_discount_attempted_at = CASE WHEN final_discount_sent_at IS NULL THEN NULL ELSE final_discount_attempted_at END,
+         updated_at = ?
+     WHERE phone_number = ?`
+  ).run(finalDiscountAt, now, phoneNumber);
+  return finalDiscountAt;
+}
+
 export function saveContactName(phoneNumber, name) {
   ensureContact(phoneNumber);
   db.prepare("UPDATE contacts SET name = ?, updated_at = ? WHERE phone_number = ?").run(
@@ -1193,6 +1338,8 @@ export function requestHumanHandoff(phoneNumber, details = {}) {
           conversation_id = COALESCE(NULLIF(?, ''), conversation_id),
           promo_scheduled_at = NULL,
           reminder_scheduled_at = NULL,
+          reminder2_scheduled_at = NULL,
+          final_discount_scheduled_at = NULL,
           updated_at = ?
      WHERE phone_number = ?`
   ).run(
@@ -1234,10 +1381,11 @@ export function markContactPaid(phoneNumber, paid = true, details = {}) {
           promo_scheduled_at = CASE WHEN ? = 1 THEN NULL ELSE promo_scheduled_at END,
           reminder_scheduled_at = CASE WHEN ? = 1 THEN NULL ELSE reminder_scheduled_at END,
           reminder2_scheduled_at = CASE WHEN ? = 1 THEN NULL ELSE reminder2_scheduled_at END,
+          final_discount_scheduled_at = CASE WHEN ? = 1 THEN NULL ELSE final_discount_scheduled_at END,
           handoff = CASE WHEN ? = 1 THEN 0 ELSE handoff END,
           updated_at = ?
        WHERE phone_number = ?`
-  ).run(paid ? 1 : 0, paid ? 1 : 0, now, paid ? 1 : 0, paid ? 1 : 0, paid ? 1 : 0, paid ? 1 : 0, now, phoneNumber);
+  ).run(paid ? 1 : 0, paid ? 1 : 0, now, paid ? 1 : 0, paid ? 1 : 0, paid ? 1 : 0, paid ? 1 : 0, paid ? 1 : 0, now, phoneNumber);
 }
 
 export function recordPayment(phoneNumber, details = {}) {
@@ -2072,6 +2220,47 @@ export function markReminder2Sent(phoneNumber) {
   ).run(nowIso(), nowIso(), phoneNumber);
 }
 
+export function listDueFinalDiscounts(date = new Date()) {
+  const now = date.toISOString();
+  return db.prepare(
+    `SELECT * FROM contacts
+     WHERE paid = 0
+       AND handoff = 0
+       AND promo_sent = 0
+       AND final_discount_sent_at IS NULL
+       AND final_discount_attempted_at IS NULL
+       AND final_discount_scheduled_at IS NOT NULL
+       AND final_discount_scheduled_at <= ?
+     ORDER BY final_discount_scheduled_at ASC
+     LIMIT 25`
+  ).all(now);
+}
+
+export function claimDueFinalDiscount(phoneNumber, date = new Date()) {
+  const now = date.toISOString();
+  const result = db.prepare(
+    `UPDATE contacts
+     SET final_discount_attempted_at = ?, final_discount_scheduled_at = NULL, updated_at = ?
+     WHERE phone_number = ?
+       AND paid = 0
+       AND handoff = 0
+       AND promo_sent = 0
+       AND final_discount_sent_at IS NULL
+       AND final_discount_attempted_at IS NULL
+       AND final_discount_scheduled_at IS NOT NULL
+       AND final_discount_scheduled_at <= ?`
+  ).run(now, now, phoneNumber, now);
+  return result.changes === 1;
+}
+
+export function markFinalDiscountSent(phoneNumber) {
+  ensureContact(phoneNumber);
+  const now = nowIso();
+  db.prepare(
+    "UPDATE contacts SET final_discount_sent_at = ?, final_discount_scheduled_at = NULL, updated_at = ? WHERE phone_number = ?"
+  ).run(now, now, phoneNumber);
+}
+
 export function markManualOfferSent(phoneNumber) {
   ensureContact(phoneNumber);
   db.prepare(
@@ -2079,9 +2268,10 @@ export function markManualOfferSent(phoneNumber) {
      SET promo_sent = 1,
           promo_sent_at = ?,
           promo_scheduled_at = NULL,
-          reminder_scheduled_at = NULL,
-          reminder2_scheduled_at = NULL,
-          updated_at = ?
+           reminder_scheduled_at = NULL,
+           reminder2_scheduled_at = NULL,
+           final_discount_scheduled_at = NULL,
+           updated_at = ?
       WHERE phone_number = ?`
   ).run(nowIso(), nowIso(), phoneNumber);
 }

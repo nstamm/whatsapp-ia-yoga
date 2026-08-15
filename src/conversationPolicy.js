@@ -9,13 +9,22 @@ export function shouldAutoProcessPaymentAttachment(hasContext, proofDetails = {}
 }
 
 export function hasCommercialPaymentContext(contact = {}, history = [], paymentAliasSent = false) {
-  if (contact.product_link_sent || contact.promo_sent || paymentAliasSent) return true;
+  if (contact.product_link_sent || contact.promo_sent || contact.exclusive_offer_text_sent || contact.final_discount_sent_at || paymentAliasSent) return true;
 
   return history.some(
     (item) =>
       item.role === "assistant" &&
-      /pagos\.ofiprof|\$\s?16[\s.,]?999|16[\s.,]?999|comprobante|transfer|acceso|te libero|producto liberado/i.test(
+      /pagos\.ofiprof|\$\s?(?:16[\s.,]?999|9[\s.,]?999|6[\s.,]?999)|comprobante|transfer|acceso|te libero|producto liberado/i.test(
         item.content ?? ""
       )
+  );
+}
+
+export function shouldActivateExclusiveOffer(contact = {}, text = "") {
+  return Boolean(
+    !contact.paid &&
+    contact.reminder2_sent_at &&
+    !contact.exclusive_offer_accepted_at &&
+    String(text ?? "").trim()
   );
 }

@@ -28,7 +28,7 @@ test("every editable flow setting is represented by exactly one node", () => {
 test("flow keeps all core runtime stages visible", () => {
   const nodeIds = new Set(CONVERSATION_FLOW.nodes.map((node) => node.id));
   const requiredStages = [
-    "incoming", "routing", "greeting", "landing", "await-video-response", "alias", "product", "downsell23h",
+    "incoming", "routing", "greeting", "landing", "await-video-response", "alias", "product", "downsell23h", "exclusive-offer", "final-discount",
     "payment", "attribution-recovery", "delivery", "paid", "manual", "handoff",
   ];
 
@@ -75,6 +75,19 @@ test("flow waits for one response without requiring confirmation words", () => {
     CONVERSATION_FLOW.edges.some(([source, target]) => source === "await-video-response" && target === "alias"),
     true
   );
+});
+
+test("flow documents the two-stage 23h discount recovery", () => {
+  const reminder = CONVERSATION_FLOW.nodes.find((node) => node.id === "downsell23h");
+  const exclusive = CONVERSATION_FLOW.nodes.find((node) => node.id === "exclusive-offer");
+  const finalDiscount = CONVERSATION_FLOW.nodes.find((node) => node.id === "final-discount");
+  assert.match(reminder.description, /23 horas del mensaje inicial/);
+  assert.match(reminder.description, /incluso un emoji/);
+  assert.match(exclusive.description, /\$9\.999/);
+  assert.match(finalDiscount.description, /23 horas después de la respuesta/);
+  assert.match(finalDiscount.description, /\$6\.999/);
+  assert.equal(CONVERSATION_FLOW.edges.some(([from, to]) => from === "downsell23h" && to === "exclusive-offer"), true);
+  assert.equal(CONVERSATION_FLOW.edges.some(([from, to]) => from === "exclusive-offer" && to === "final-discount"), true);
 });
 
 test("flow documents durable greeting audio fallback", () => {

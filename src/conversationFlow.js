@@ -9,6 +9,8 @@ export const FLOW_EDITABLE_FIELDS = Object.freeze({
   payment_alias_note: { label: "Presentación del titular", input: "text", maxLength: 500, required: true },
   payment_instructions_text: { label: "Instrucciones después del alias", input: "textarea", maxLength: 1000, required: true },
   reminder2_offer_text: { label: "Recordatorio 23h", input: "textarea", maxLength: 4000 },
+  exclusive_offer_text: { label: "Oferta exclusiva por respuesta", input: "textarea", maxLength: 2000, required: true },
+  final_discount_text: { label: "Descuento final 23h", input: "textarea", maxLength: 2000, required: true },
   flash_offer_text: { label: "Oferta manual", input: "textarea", maxLength: 4000 },
   product_access_url: { label: "Link de acceso", input: "url", maxLength: 2000 },
   product_delivery_text: { label: "Entrega post-pago", input: "textarea", maxLength: 4000 },
@@ -28,7 +30,9 @@ export const CONVERSATION_FLOW = Object.freeze({
       { type: "video", label: "Video de Fantasía Color PRO", src: "/media/contenidofantasia.mp4" },
     ] },
     { id: "product", title: "Dudas sobre el producto", subtitle: "Respuesta IA contextual", description: "Responde preguntas sobre imprimibles, uso y contenido. Ante cualquier consulta por una serie, personaje o temática, confirma que sí está incluida.", type: "message", x: 890, y: 230, fields: ["master_prompt", "next_reply_prompt", "openai_max_tokens"] },
-    { id: "downsell23h", title: "Recordatorio 23h", subtitle: "Oferta WhatsApp $16.999", description: "A las 23 horas de la información inicial, si el contacto aún no compró, recuerda una sola vez la oferta exclusiva por WhatsApp de $16.999.", type: "message", x: 1790, y: 40, fields: ["reminder2_offer_text"] },
+    { id: "downsell23h", title: "Recordatorio 23h", subtitle: "Esperar cualquier respuesta", description: "A las 23 horas del mensaje inicial, si el contacto aún no compró, pregunta si pudo ver el material. Cualquier respuesta posterior, incluso un emoji, libera la oferta exclusiva.", type: "message", x: 1790, y: 40, fields: ["reminder2_offer_text"] },
+    { id: "exclusive-offer", title: "Oferta exclusiva", subtitle: "$9.999 + alias separado", description: "Ante la primera respuesta posterior al recordatorio, sin analizar su contenido, ofrece Fantasía Color PRO a $9.999, presenta al titular y vuelve a enviar el alias solo para copiarlo fácilmente.", type: "message", x: 2090, y: 40, fields: ["exclusive_offer_text"] },
+    { id: "final-discount", title: "Descuento final", subtitle: "$6.999 después de la respuesta", description: "Si sigue sin comprar, 23 horas después de la respuesta que liberó la oferta envía una última propuesta a $6.999 indicando que el dinero no sea un problema.", type: "message", x: 2390, y: 40, fields: ["final_discount_text"] },
     { id: "payment", title: "Comprobante", subtitle: "Detectar y registrar pago", description: "Reconoce adjuntos de pago, extrae los datos disponibles y registra la venta antes de habilitar la entrega del producto.", type: "condition", x: 590, y: 450 },
     { id: "attribution-recovery", title: "Recuperar origen Ads", subtitle: "Compensación post-pago", description: "Si el webhook no incluyó el origen CTWA, consulta la conversación exacta en Zernio y reintenta en segundo plano. Sólo asigna la venta cuando el ID coincide exactamente con un anuncio de Ofiprof USD.", type: "action", x: 840, y: 450 },
     { id: "delivery", title: "Entregar producto", subtitle: "Confirmación + acceso", description: "Confirma el pago y envía el mensaje de entrega con el enlace de acceso configurado.", type: "message", x: 1090, y: 450, fields: ["product_delivery_text", "product_access_url"] },
@@ -38,7 +42,7 @@ export const CONVERSATION_FLOW = Object.freeze({
   ],
   edges: [
     ["incoming", "routing"], ["routing", "greeting"], ["routing", "product"], ["greeting", "landing"], ["landing", "await-video-response"], ["await-video-response", "alias"], ["alias", "product"],
-    ["greeting", "downsell23h"], ["routing", "payment"], ["payment", "attribution-recovery"], ["attribution-recovery", "delivery"], ["delivery", "paid"],
+    ["greeting", "downsell23h"], ["downsell23h", "exclusive-offer"], ["exclusive-offer", "final-discount"], ["routing", "payment"], ["payment", "attribution-recovery"], ["attribution-recovery", "delivery"], ["delivery", "paid"],
     ["routing", "handoff"], ["manual", "payment"],
   ],
 });

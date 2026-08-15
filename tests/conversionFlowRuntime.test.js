@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { hasCommercialPaymentContext, initialOfferTextChunks, shouldAutoProcessPaymentAttachment } from "../src/conversationPolicy.js";
+import { hasCommercialPaymentContext, initialOfferTextChunks, shouldActivateExclusiveOffer, shouldAutoProcessPaymentAttachment } from "../src/conversationPolicy.js";
 import { SOCIAL_MESSAGE_LIMIT } from "../src/reminderPolicy.js";
 
 const indexSource = readFileSync(fileURLToPath(new URL("../src/index.js", import.meta.url)), "utf8");
@@ -15,6 +15,29 @@ test("runtime sends only the Fantasía greeting audio", () => {
 
 test("runtime has no 6h reminder worker", () => {
   assert.doesNotMatch(indexSource, /processDueReminders|6h reminder|reminder_detail_text|reminder_product_description/);
+});
+
+test("runtime sends the $9.999 offer after any reminder response and schedules the $6.999 final discount", () => {
+  const awaiting = { paid: 0, reminder2_sent_at: "2026-08-12T10:00:00.000Z", exclusive_offer_accepted_at: null };
+  for (const reply of ["OK", "dale", "lo voy a mirar", "cuánto queda?", "👍"]) {
+    assert.equal(shouldActivateExclusiveOffer(awaiting, reply), true, `should activate for: ${reply}`);
+  }
+  assert.equal(shouldActivateExclusiveOffer(awaiting, "   "), false);
+  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, reminder2_sent_at: null }, "dale"), false);
+  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, exclusive_offer_accepted_at: "2026-08-12T11:00:00.000Z" }, "dale"), false);
+  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, paid: 1 }, "dale"), false);
+  assert.match(indexSource, /shouldActivateExclusiveOffer\(contact, userMessage\)/);
+  assert.match(indexSource, /acceptExclusiveOfferResponse\(phoneNumber\)/);
+  assert.match(indexSource, /const finalAt = markExclusiveAliasSent\(phoneNumber\)/);
+  assert.doesNotMatch(indexSource, /isExclusiveOfferOk/);
+  assert.match(indexSource, /getSetting\("exclusive_offer_text"/);
+  assert.match(indexSource, /markExclusiveOfferTextSent\(phoneNumber\)/);
+  assert.match(indexSource, /markExclusiveAliasNoteSent\(phoneNumber\)/);
+  assert.match(indexSource, /markExclusiveAliasSent\(phoneNumber\)/);
+  assert.match(indexSource, /processDueFinalDiscounts/);
+  assert.match(indexSource, /getSetting\("final_discount_text"/);
+  assert.match(indexSource, /contact\.exclusive_alias_sent/);
+  assert.match(indexSource, /contact\.final_discount_sent_at \? 6999 : contact\.exclusive_offer_text_sent \? 9999/);
 });
 
 test("runtime sends video, alias owner, alias, and payment instructions after any first reply", () => {
@@ -59,7 +82,7 @@ test("a concurrent message waits for the claimed batch and retries it after fail
 });
 
 test("an emoji-only response advances a pending second batch", () => {
-  assert.match(indexSource, /isEmojiOnly\(userMessage\) && !secondBatchPending/);
+  assert.match(indexSource, /isEmojiOnly\(userMessage\) && !secondBatchPending && !awaitingExclusiveOfferResponse && !exclusiveOfferPending/);
 });
 
 test("Fantasia media files are provider-safe", () => {
@@ -78,6 +101,8 @@ test("runtime retries pending delivery for a paid contact", () => {
 test("sending the alias creates payment context", () => {
   assert.equal(hasCommercialPaymentContext({}, [], false), false);
   assert.equal(hasCommercialPaymentContext({}, [], true), true);
+  assert.equal(hasCommercialPaymentContext({ exclusive_offer_text_sent: 1 }, [], false), true);
+  assert.equal(hasCommercialPaymentContext({}, [{ role: "assistant", content: "Oferta exclusiva $9.999" }], false), true);
   assert.equal(
     hasCommercialPaymentContext({}, [{ role: "assistant", content: "Transferí al alias pagos.ofiprof" }], false),
     true
