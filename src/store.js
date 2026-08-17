@@ -30,7 +30,7 @@ function measuredGet(name, statement, params = []) {
 const PRODUCT_CONFIG_VERSION = "fantasia-v1";
 const SECOND_BATCH_CONFIG_VERSION = "fantasia-second-batch-v2";
 const OFFER_COPY_VERSION = "fantasia-offer-copy-v2";
-const RECOVERY_FLOW_VERSION = "fantasia-recovery-v1";
+const RECOVERY_FLOW_VERSION = "fantasia-recovery-v2";
 const CURRENT_PRODUCT_CODE = "fantasia-color-pro";
 
 const DEFAULT_MASTER_PROMPT = `Sos una persona del equipo comercial de Ofiprof respondiendo por chat a leads que llegan desde anuncios de Meta, WhatsApp o Instagram.
@@ -98,13 +98,19 @@ const DEFAULT_PRODUCT_LANDING_TEXT = `Si querés ver más detalles y algunas mue
 
 Si me das el ok, te mando un video para que veas el material.`;
 
-const DEFAULT_REMINDER2_OFFER_TEXT = `Hola! Pudiste ver el material de *Fantasía Color PRO*? ✨
+const LEGACY_REMINDER2_OFFER_TEXT = `Hola! Pudiste ver el material de *Fantasía Color PRO*? ✨
 
 Si querés que te pase una oferta exclusiva, respondeme *OK* y te la envío 🙌`;
-
-const DEFAULT_EXCLUSIVE_OFFER_TEXT = `Te dejo una oferta exclusiva para que puedas aprovechar *Fantasía Color PRO* 🙌
+const LEGACY_EXCLUSIVE_OFFER_TEXT = `Te dejo una oferta exclusiva para que puedas aprovechar *Fantasía Color PRO* 🙌
 
 Te lo dejamos a *$9.999* en un único pago.`;
+const DIRECT_EXCLUSIVE_OFFER_TEXT = `Hola! Te dejo una oferta exclusiva de *Fantasía Color PRO* 🙌
+
+Te lo dejamos a *$9.999* en un único pago.
+
+Cuando recibamos y confirmemos el pago, te enviamos el link de acceso.`;
+const DEFAULT_REMINDER2_OFFER_TEXT = DIRECT_EXCLUSIVE_OFFER_TEXT;
+const DEFAULT_EXCLUSIVE_OFFER_TEXT = DIRECT_EXCLUSIVE_OFFER_TEXT;
 
 const DEFAULT_FINAL_DISCOUNT_TEXT = `No quiero que el dinero sea un problema para que puedas tener *Fantasía Color PRO* 💛
 
@@ -463,11 +469,13 @@ if (storedRecoveryFlowVersion !== RECOVERY_FLOW_VERSION) {
     "UPDATE settings SET value = ? WHERE key = 'reminder2_offer_text' AND value = ?"
   ).run(
     DEFAULT_REMINDER2_OFFER_TEXT,
-    `Hola! Te escribo por *Fantasía Color PRO* ✨
-
-La oferta exclusiva por WhatsApp sigue disponible a *$16.999*.
-
-Tenés más de 100 libros, imprimibles educativos, juegos y actividades para chicos. Si querés aprovecharla, respondeme por acá.`
+    LEGACY_REMINDER2_OFFER_TEXT
+  );
+  db.prepare(
+    "UPDATE settings SET value = ? WHERE key = 'exclusive_offer_text' AND value = ?"
+  ).run(
+    DEFAULT_EXCLUSIVE_OFFER_TEXT,
+    LEGACY_EXCLUSIVE_OFFER_TEXT
   );
   db.prepare(
     `UPDATE settings
@@ -1203,34 +1211,21 @@ export function releaseSecondResponseBatch(phoneNumber) {
   );
 }
 
-export function acceptExclusiveOfferResponse(phoneNumber, date = new Date()) {
+export function claimExclusiveOffer(phoneNumber, date = new Date()) {
   ensureContact(phoneNumber);
-  const acceptedAt = date.toISOString();
+  const activatedAt = date.toISOString();
   const result = db.prepare(
     `UPDATE contacts
-     SET exclusive_offer_accepted_at = ?,
+     SET exclusive_offer_claimed = 1,
+         exclusive_offer_accepted_at = COALESCE(exclusive_offer_accepted_at, ?),
          updated_at = ?
      WHERE phone_number = ?
        AND paid = 0
        AND handoff = 0
        AND reminder2_sent_at IS NOT NULL
-       AND exclusive_offer_accepted_at IS NULL`
-  ).run(acceptedAt, acceptedAt, phoneNumber);
-  return result.changes === 1 ? acceptedAt : null;
-}
-
-export function claimExclusiveOffer(phoneNumber) {
-  ensureContact(phoneNumber);
-  const result = db.prepare(
-    `UPDATE contacts
-     SET exclusive_offer_claimed = 1, updated_at = ?
-     WHERE phone_number = ?
-       AND paid = 0
-       AND handoff = 0
-       AND exclusive_offer_accepted_at IS NOT NULL
        AND exclusive_offer_claimed = 0
        AND (exclusive_offer_text_sent = 0 OR exclusive_alias_note_sent = 0 OR exclusive_alias_sent = 0)`
-  ).run(nowIso(), phoneNumber);
+  ).run(activatedAt, activatedAt, phoneNumber);
   return result.changes === 1;
 }
 
@@ -2218,6 +2213,24 @@ export function markReminder2Sent(phoneNumber) {
           updated_at = ?
       WHERE phone_number = ?`
   ).run(nowIso(), nowIso(), phoneNumber);
+}
+
+export function listPendingExclusiveOffers(options = {}) {
+  const limit = Math.min(100, Math.max(1, Number.parseInt(options.limit ?? 100, 10) || 100));
+  return db.prepare(
+    `SELECT *
+     FROM contacts
+     WHERE paid = 0
+       AND handoff = 0
+       AND promo_sent = 0
+       AND conversation_id != ''
+       AND reminder2_sent_at IS NOT NULL
+       AND exclusive_offer_claimed = 0
+       AND final_discount_sent_at IS NULL
+       AND (exclusive_offer_text_sent = 0 OR exclusive_alias_note_sent = 0 OR exclusive_alias_sent = 0)
+     ORDER BY reminder2_sent_at ASC
+     LIMIT ?`
+  ).all(limit);
 }
 
 export function listDueFinalDiscounts(date = new Date()) {

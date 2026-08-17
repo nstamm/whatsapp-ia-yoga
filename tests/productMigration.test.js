@@ -186,5 +186,25 @@ test("recovery flow migration installs the discount funnel without overwriting c
   assert.match(migratedStore.getSetting("final_discount_text"), /\*\$6\.999\*/);
   assert.match(migratedStore.getSetting("master_prompt"), /último precio que el sistema ya ofreció/);
   assert.match(migratedStore.getSetting("next_reply_prompt"), /último precio que el sistema ya ofreció/);
-  assert.equal(migratedStore.getSetting("recovery_flow_version"), "fantasia-recovery-v1");
+  assert.equal(migratedStore.getSetting("recovery_flow_version"), "fantasia-recovery-v2");
+});
+
+test("recovery flow migration replaces the gated offer copy with direct payment instructions", async () => {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "fantasia-recovery-direct-offer-"));
+  process.env.CRM_DATA_DIR = dataDir;
+  await import(`../src/store.js?recovery-direct-setup=${Date.now()}`);
+  const db = new DatabaseSync(path.join(dataDir, "ofiprof-crm.sqlite"));
+  db.prepare("UPDATE settings SET value = 'fantasia-recovery-v1' WHERE key = 'recovery_flow_version'").run();
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'reminder2_offer_text'").run(
+    "Hola! Pudiste ver el material de *Fantasía Color PRO*? ✨\n\nSi querés que te pase una oferta exclusiva, respondeme *OK* y te la envío 🙌"
+  );
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'exclusive_offer_text'").run(
+    "Te dejo una oferta exclusiva para que puedas aprovechar *Fantasía Color PRO* 🙌\n\nTe lo dejamos a *$9.999* en un único pago."
+  );
+  db.close();
+
+  const migratedStore = await import(`../src/store.js?recovery-direct-run=${Date.now()}`);
+  assert.match(migratedStore.getSetting("reminder2_offer_text"), /link de acceso/i);
+  assert.doesNotMatch(migratedStore.getSetting("reminder2_offer_text"), /respondeme \*OK\*/i);
+  assert.match(migratedStore.getSetting("exclusive_offer_text"), /link de acceso/i);
 });

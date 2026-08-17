@@ -77,14 +77,15 @@ test("flow waits for one response without requiring confirmation words", () => {
   );
 });
 
-test("flow documents the two-stage 23h discount recovery", () => {
+test("flow documents the direct two-stage 23h discount recovery", () => {
   const reminder = CONVERSATION_FLOW.nodes.find((node) => node.id === "downsell23h");
   const exclusive = CONVERSATION_FLOW.nodes.find((node) => node.id === "exclusive-offer");
   const finalDiscount = CONVERSATION_FLOW.nodes.find((node) => node.id === "final-discount");
   assert.match(reminder.description, /23 horas del mensaje inicial/);
-  assert.match(reminder.description, /incluso un emoji/);
+  assert.match(reminder.description, /sin pedir una confirmación previa/);
   assert.match(exclusive.description, /\$9\.999/);
-  assert.match(finalDiscount.description, /23 horas después de la respuesta/);
+  assert.match(finalDiscount.description, /23 horas después del primer envío/);
+  assert.match(finalDiscount.description, /aunque el contacto no haya respondido/);
   assert.match(finalDiscount.description, /\$6\.999/);
   assert.equal(CONVERSATION_FLOW.edges.some(([from, to]) => from === "downsell23h" && to === "exclusive-offer"), true);
   assert.equal(CONVERSATION_FLOW.edges.some(([from, to]) => from === "exclusive-offer" && to === "final-discount"), true);

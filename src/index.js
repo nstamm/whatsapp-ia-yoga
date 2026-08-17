@@ -67,10 +67,10 @@ import {
   listDueReminder2s,
   claimDueReminder2,
   markReminder2Sent,
+  listPendingExclusiveOffers,
   listDueFinalDiscounts,
   claimDueFinalDiscount,
   markFinalDiscountSent,
-  acceptExclusiveOfferResponse,
   claimExclusiveOffer,
   releaseExclusiveOffer,
   markExclusiveOfferTextSent,
@@ -146,6 +146,7 @@ let cachedPrimaryAdAccountName = "";
 let latestAdsDashboard = null;
 const metaAdsRefreshes = new Map();
 let ctwaBackfillRequest = null;
+let exclusiveOfferBackfillRequest = null;
 let lastCtwaBackfillAt = 0;
 const ctwaRecoveryTimers = new Map();
 const adsDashboardCache = createAsyncTtlCache({
@@ -861,6 +862,39 @@ async function sendReminderText(contact, text, options, label) {
   }
 }
 
+async function deliverExclusiveOffer(contact, { offerSettingKey = "exclusive_offer_text", sendAndRecord } = {}) {
+  if (typeof sendAndRecord !== "function") throw new Error("sendAndRecord is required for the exclusive offer");
+  if (!claimExclusiveOffer(contact.phone_number)) return false;
+
+  try {
+    if (!getContact(contact.phone_number).exclusive_offer_text_sent) {
+      const exclusiveText = getSetting(offerSettingKey, "").trim();
+      if (!exclusiveText) throw new Error(`${offerSettingKey} is empty`);
+      await sendAndRecord(exclusiveText);
+      markExclusiveOfferTextSent(contact.phone_number);
+    }
+
+    if (!getContact(contact.phone_number).exclusive_alias_note_sent) {
+      const aliasNote = getSetting("payment_alias_note", "").trim();
+      if (!aliasNote) throw new Error("payment_alias_note is empty");
+      await sendAndRecord(aliasNote);
+      markExclusiveAliasNoteSent(contact.phone_number);
+    }
+
+    if (!getContact(contact.phone_number).exclusive_alias_sent) {
+      const alias = getSetting("payment_alias", "").trim();
+      if (!alias) throw new Error("payment_alias is empty");
+      await sendAndRecord(alias);
+      const finalAt = markExclusiveAliasSent(contact.phone_number);
+      if (finalAt) console.log(`⏰ Final $6.999 discount scheduled for ${contact.phone_number}: ${finalAt}`);
+    }
+
+    return true;
+  } finally {
+    releaseExclusiveOffer(contact.phone_number);
+  }
+}
+
 async function processDueDownsellsImpl() {
   const due = listDueReminder2s();
 
@@ -879,27 +913,53 @@ async function processDueDownsellsImpl() {
     }
 
     try {
-      const text = getSetting("reminder2_offer_text", "").trim();
-      if (!text) continue;
-
-      const options = zernioOptionsFor(contact);
-      await sendReminderText(contact, text, options, "23h reminder");
+      if (!getSetting("reminder2_offer_text", "").trim()) throw new Error("reminder2_offer_text is empty");
       markReminder2Sent(contact.phone_number);
-      console.log(`📣 23h reminder sent to ${contact.phone_number}`);
+      const sent = await deliverExclusiveOffer(getContact(contact.phone_number), {
+        offerSettingKey: "reminder2_offer_text",
+        sendAndRecord: (text) => sendReminderText(contact, text, zernioOptionsFor(contact), "23h $9.999 offer"),
+      });
+      if (sent) console.log(`📣 Direct $9.999 offer sent at 23h to ${contact.phone_number}`);
     } catch (err) {
       if (isPermanentReminderSendError(err)) {
         markReminder2Sent(contact.phone_number);
-        console.warn(`⏭️ 23h reminder stopped for ${contact.phone_number}: ${err.message}`);
+        console.warn(`⏭️ Direct 23h offer stopped for ${contact.phone_number}: ${err.message}`);
         continue;
       }
 
-      console.error(`❌ Error sending 23h reminder to ${contact.phone_number}; automatic retry disabled:`, err.message);
+      console.error(`❌ Error sending direct 23h offer to ${contact.phone_number}; automatic retry disabled:`, err.message);
     }
   }
 }
 
 function processDueDownsells() {
   return trackContactOperation(processDueDownsellsImpl);
+}
+
+async function processPendingExclusiveOffersImpl() {
+  const pending = listPendingExclusiveOffers({ limit: 100 });
+  const result = { selected: pending.length, sent: 0, skipped: 0, failed: [] };
+
+  for (const contact of pending) {
+    try {
+      const sent = await deliverExclusiveOffer(contact, {
+        offerSettingKey: "reminder2_offer_text",
+        sendAndRecord: (text) => sendReminderText(contact, text, zernioOptionsFor(contact), "pending $9.999 offer"),
+      });
+      if (sent) result.sent += 1;
+      else result.skipped += 1;
+    } catch (err) {
+      result.failed.push({ phoneNumber: contact.phone_number, error: err.message });
+      console.error(`❌ Pending $9.999 offer failed for ${contact.phone_number}:`, err.message);
+    }
+  }
+
+  console.log(JSON.stringify({ event: "exclusive_offer_backfill_completed", ...result }));
+  return result;
+}
+
+function processPendingExclusiveOffers() {
+  return trackContactOperation(processPendingExclusiveOffersImpl);
 }
 
 async function processDueFinalDiscountsImpl() {
@@ -2285,6 +2345,8 @@ function adminStatusMessage(status) {
     promo_offered: "Producto liberado manualmente.",
     flash_offered: "Bombazo enviado manualmente.",
     promo_send_failed: "Fallo el envio de la liberacion. Revisá la consola.",
+    exclusive_backfill_started: "Se inició el envío de las ofertas exclusivas pendientes.",
+    exclusive_backfill_running: "El envío de las ofertas exclusivas ya está en curso.",
     contact_deleted: "Conversacion eliminada.",
     contacts_purged: "Historial de contactos eliminado.",
     contacts_purge_failed: "No se eliminó el historial. Escribí BORRAR TODO para confirmar.",
@@ -2483,6 +2545,10 @@ function renderConversationSection(req, conversations, options = {}) {
   </div>`;
   const tableHtml = renderConversationTable(req, conversations, { ...options, convFilter });
   const historyActions = `<div class="history-actions">
+    <form method="post" action="/admin/exclusive-offers/backfill" onsubmit="return confirm('Esto va a enviar la oferta de $9.999 a todos los pendientes elegibles. Continuar?')">
+      ${adminHiddenFields(req, { section: "conversations" })}
+      <button type="submit" class="bomb">Enviar ofertas $9.999 pendientes</button>
+    </form>
     <form method="get" action="/admin/contacts.csv">
       ${adminHiddenFields(req)}
       <button type="submit" class="secondary">Descargar teléfonos CSV</button>
@@ -4318,6 +4384,25 @@ app.patch("/admin/api/flow", requireAdmin, (req, res) => {
   return res.json({ flow: buildConversationFlow(getSettings()) });
 });
 
+app.post("/admin/exclusive-offers/backfill", requireAdmin, (req, res) => {
+  if (exclusiveOfferBackfillRequest) {
+    return res.redirect(303, adminPath(req, { status: "exclusive_backfill_running", section: "conversations" }));
+  }
+
+  const request = processPendingExclusiveOffers();
+  exclusiveOfferBackfillRequest = request;
+  request
+    .then(
+      (result) => console.log(JSON.stringify({ event: "exclusive_offer_backfill_finished", ...result })),
+      (err) => console.error("❌ Exclusive offer backfill failed:", err.message)
+    )
+    .finally(() => {
+      if (exclusiveOfferBackfillRequest === request) exclusiveOfferBackfillRequest = null;
+    });
+
+  return res.redirect(303, adminPath(req, { status: "exclusive_backfill_started", section: "conversations" }));
+});
+
 app.post("/admin/handoffs", requireAdmin, (req, res) => {
   const phoneNumber = String(req.body.phoneNumber ?? "").trim();
 
@@ -4621,7 +4706,6 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
 
   let initialOfferClaimed = false;
   let secondBatchClaimed = false;
-  let exclusiveOfferClaimed = false;
   let finishSecondBatch = null;
   try {
     if (userMessage.trim() === "/clear") {
@@ -4641,11 +4725,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
     const contact = getContact(phoneNumber, identity);
     let history = getHistory(phoneNumber);
     let messageForAI = userMessage || "[archivo adjunto]";
-    const awaitingExclusiveOfferResponse = shouldActivateExclusiveOffer(contact, userMessage);
-    const exclusiveOfferPending =
-      !contact.paid &&
-      contact.exclusive_offer_accepted_at &&
-      (!contact.exclusive_offer_text_sent || !contact.exclusive_alias_note_sent || !contact.exclusive_alias_sent);
+    const exclusiveOfferPending = shouldActivateExclusiveOffer(contact);
     const secondBatchPending =
       !contact.paid &&
       hasGreetingBeenSent(phoneNumber) &&
@@ -4670,7 +4750,7 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
       return;
     }
 
-    if (isEmojiOnly(userMessage) && !secondBatchPending && !awaitingExclusiveOfferResponse && !exclusiveOfferPending) {
+    if (isEmojiOnly(userMessage) && !secondBatchPending && !exclusiveOfferPending) {
       console.log(`🏷️ [${phoneNumber}] Emoji-only message, ignoring.`);
       return;
     }
@@ -4746,46 +4826,16 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
       return;
     }
 
-    const acceptedExclusiveOffer = awaitingExclusiveOfferResponse;
-
-    if (acceptedExclusiveOffer || exclusiveOfferPending) {
+    if (exclusiveOfferPending) {
       addMessage(phoneNumber, "user", messageForAI, { conversationId });
-      if (acceptedExclusiveOffer) {
-        acceptExclusiveOfferResponse(phoneNumber);
-      }
-      if (!claimExclusiveOffer(phoneNumber)) {
-        console.log(`⏭️ Exclusive offer already claimed or completed for ${phoneNumber}`);
-        return;
-      }
-      exclusiveOfferClaimed = true;
-      const freshContact = getContact(phoneNumber);
-
-      if (!freshContact.exclusive_offer_text_sent) {
-        const exclusiveText = getSetting("exclusive_offer_text", "").trim();
-        if (!exclusiveText) throw new Error("exclusive_offer_text is empty");
-        await reply(exclusiveText);
-        addMessage(phoneNumber, "assistant", exclusiveText, { conversationId });
-        markExclusiveOfferTextSent(phoneNumber);
-      }
-      if (!freshContact.exclusive_alias_note_sent) {
-        const aliasNote = getSetting("payment_alias_note", "").trim();
-        if (!aliasNote) throw new Error("payment_alias_note is empty");
-        await sleep(900);
-        await reply(aliasNote);
-        addMessage(phoneNumber, "assistant", aliasNote, { conversationId });
-        markExclusiveAliasNoteSent(phoneNumber);
-      }
-      if (!freshContact.exclusive_alias_sent) {
-        const alias = getSetting("payment_alias", "").trim();
-        if (!alias) throw new Error("payment_alias is empty");
-        await sleep(900);
-        await reply(alias);
-        addMessage(phoneNumber, "assistant", alias, { conversationId });
-        const finalAt = markExclusiveAliasSent(phoneNumber);
-        if (finalAt) console.log(`⏰ Final $6.999 discount scheduled for ${phoneNumber}: ${finalAt}`);
-      }
-      releaseExclusiveOffer(phoneNumber);
-      exclusiveOfferClaimed = false;
+      const sent = await deliverExclusiveOffer(getContact(phoneNumber), {
+        offerSettingKey: "exclusive_offer_text",
+        sendAndRecord: async (text) => {
+          await reply(text);
+          addMessage(phoneNumber, "assistant", text, { conversationId });
+        },
+      });
+      if (!sent) console.log(`⏭️ Exclusive offer already claimed or completed for ${phoneNumber}`);
       return;
     }
 
@@ -4909,7 +4959,6 @@ async function processIncomingMessageImpl({ req, body, isLocalTest }) {
   } catch (err) {
     if (initialOfferClaimed) releaseInitialOfferClaim(phoneNumber);
     if (secondBatchClaimed) releaseSecondResponseBatch(phoneNumber);
-    if (exclusiveOfferClaimed) releaseExclusiveOffer(phoneNumber);
     console.error(`❌ Error handling message from ${phoneNumber}:`, err.message);
     try {
       await reply("Perdón, tuve un problema para responder. Probá escribirme de nuevo en un momento 🙏");

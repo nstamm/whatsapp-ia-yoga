@@ -83,23 +83,42 @@ test("a failed claimed downsell is not automatically due again", () => {
   assert.equal(store.listDueReminder2s(new Date("2026-07-12T12:00:00.000Z")).length, 0);
 });
 
-test("a response after the 23h reminder claims the exclusive offer once", () => {
+test("the direct 23h offer claims the exclusive offer once", () => {
   const phoneNumber = "+544444444444";
-  const okAt = new Date("2026-07-12T12:00:00.000Z");
+  const offerAt = new Date("2026-07-12T12:00:00.000Z");
   store.ensureContact(phoneNumber, { conversationId: "conversation-exclusive" });
   db.prepare("UPDATE contacts SET reminder2_sent_at = ? WHERE phone_number = ?").run(
     "2026-07-12T11:00:00.000Z",
     phoneNumber
   );
 
-  assert.equal(store.acceptExclusiveOfferResponse(phoneNumber, okAt), okAt.toISOString());
-  assert.equal(store.claimExclusiveOffer(phoneNumber), true);
-  assert.equal(store.claimExclusiveOffer(phoneNumber), false);
+  assert.equal(store.claimExclusiveOffer(phoneNumber, offerAt), true);
+  assert.equal(store.claimExclusiveOffer(phoneNumber, offerAt), false);
   store.markExclusiveOfferTextSent(phoneNumber);
   store.markExclusiveAliasNoteSent(phoneNumber);
   assert.equal(store.markExclusiveAliasSent(phoneNumber), "2026-07-13T11:00:00.000Z");
   store.releaseExclusiveOffer(phoneNumber);
   assert.equal(store.claimExclusiveOffer(phoneNumber), false);
+});
+
+test("pending exclusive offers require a sent 23h reminder and skip blocked contacts", () => {
+  const eligible = "+544444444445";
+  const notDue = "+544444444446";
+  const paid = "+544444444447";
+  const handoff = "+544444444448";
+
+  for (const phoneNumber of [eligible, notDue, paid, handoff]) {
+    store.ensureContact(phoneNumber, { conversationId: `conversation-${phoneNumber}` });
+  }
+  db.prepare("UPDATE contacts SET reminder2_sent_at = ? WHERE phone_number = ?").run("2026-07-12T11:00:00.000Z", eligible);
+  db.prepare("UPDATE contacts SET paid = 1 WHERE phone_number = ?").run(paid);
+  db.prepare("UPDATE contacts SET reminder2_sent_at = ?, handoff = 1 WHERE phone_number = ?").run("2026-07-12T11:00:00.000Z", handoff);
+
+  const pending = store.listPendingExclusiveOffers({ limit: 20 }).map((contact) => contact.phone_number);
+  assert.equal(pending.includes(eligible), true);
+  assert.equal(pending.includes(notDue), false);
+  assert.equal(pending.includes(paid), false);
+  assert.equal(pending.includes(handoff), false);
 });
 
 test("the activating response schedules one atomic final discount 23 hours later", () => {
@@ -109,7 +128,7 @@ test("the activating response schedules one atomic final discount 23 hours later
     "2026-07-12T11:00:00.000Z",
     phoneNumber
   );
-  store.acceptExclusiveOfferResponse(phoneNumber, new Date("2026-07-12T15:00:00.000Z"));
+  store.claimExclusiveOffer(phoneNumber, new Date("2026-07-12T15:00:00.000Z"));
   const latestFinalAt = store.markExclusiveAliasSent(phoneNumber);
   assert.equal(latestFinalAt, "2026-07-13T14:00:00.000Z");
   assert.equal(
@@ -133,7 +152,7 @@ test("payment cancels a scheduled final discount", () => {
   const phoneNumber = "+546666666666";
   store.ensureContact(phoneNumber, { conversationId: "conversation-paid-final" });
   db.prepare("UPDATE contacts SET reminder2_sent_at = ? WHERE phone_number = ?").run(new Date().toISOString(), phoneNumber);
-  store.acceptExclusiveOfferResponse(phoneNumber, new Date("2026-07-12T12:00:00.000Z"));
+  store.claimExclusiveOffer(phoneNumber, new Date("2026-07-12T12:00:00.000Z"));
   store.markExclusiveAliasSent(phoneNumber);
   store.markContactPaid(phoneNumber, true);
   assert.equal(store.getContact(phoneNumber).final_discount_scheduled_at, null);
@@ -143,7 +162,7 @@ test("a manual offer cancels and suppresses the scheduled final discount", () =>
   const phoneNumber = "+547777777777";
   store.ensureContact(phoneNumber, { conversationId: "conversation-manual-final" });
   db.prepare("UPDATE contacts SET reminder2_sent_at = ? WHERE phone_number = ?").run(new Date().toISOString(), phoneNumber);
-  store.acceptExclusiveOfferResponse(phoneNumber, new Date("2026-07-12T12:00:00.000Z"));
+  store.claimExclusiveOffer(phoneNumber, new Date("2026-07-12T12:00:00.000Z"));
   store.markExclusiveAliasSent(phoneNumber);
   store.markManualOfferSent(phoneNumber);
   assert.equal(store.getContact(phoneNumber).final_discount_scheduled_at, null);
@@ -175,8 +194,10 @@ test("initial offer and delivery settings describe Fantasía Color PRO", () => {
   assert.match(store.getSetting("product_landing_text"), /te mando un video/i);
   assert.match(store.getSetting("product_access_url"), /124cjyl9aEWaEkOxmX13xy0YC27xdjo5E/);
   assert.match(store.getSetting("master_prompt"), /respondé siempre que sí está incluido/i);
-  assert.match(store.getSetting("reminder2_offer_text"), /respondeme \*OK\*/i);
+  assert.match(store.getSetting("reminder2_offer_text"), /\*\$9\.999\*/);
+  assert.doesNotMatch(store.getSetting("reminder2_offer_text"), /respondeme \*OK\*/i);
   assert.match(store.getSetting("exclusive_offer_text"), /\*\$9\.999\*/);
+  assert.match(store.getSetting("exclusive_offer_text"), /link de acceso/i);
   assert.match(store.getSetting("final_discount_text"), /dinero sea un problema/i);
   assert.match(store.getSetting("final_discount_text"), /\*\$6\.999\*/);
   assert.equal(store.getSetting("product_config_version"), "fantasia-v1");

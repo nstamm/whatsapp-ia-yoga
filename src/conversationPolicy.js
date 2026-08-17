@@ -20,11 +20,13 @@ export function hasCommercialPaymentContext(contact = {}, history = [], paymentA
   );
 }
 
-export function shouldActivateExclusiveOffer(contact = {}, text = "") {
+export function shouldActivateExclusiveOffer(contact = {}) {
   return Boolean(
     !contact.paid &&
     contact.reminder2_sent_at &&
-    !contact.exclusive_offer_accepted_at &&
-    String(text ?? "").trim()
+    !contact.handoff &&
+    (!contact.exclusive_offer_text_sent ||
+      !contact.exclusive_alias_note_sent ||
+      !contact.exclusive_alias_sent)
   );
 }

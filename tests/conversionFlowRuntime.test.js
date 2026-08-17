@@ -17,23 +17,30 @@ test("runtime has no 6h reminder worker", () => {
   assert.doesNotMatch(indexSource, /processDueReminders|6h reminder|reminder_detail_text|reminder_product_description/);
 });
 
-test("runtime sends the $9.999 offer after any reminder response and schedules the $6.999 final discount", () => {
-  const awaiting = { paid: 0, reminder2_sent_at: "2026-08-12T10:00:00.000Z", exclusive_offer_accepted_at: null };
-  for (const reply of ["OK", "dale", "lo voy a mirar", "cuánto queda?", "👍"]) {
-    assert.equal(shouldActivateExclusiveOffer(awaiting, reply), true, `should activate for: ${reply}`);
-  }
-  assert.equal(shouldActivateExclusiveOffer(awaiting, "   "), false);
-  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, reminder2_sent_at: null }, "dale"), false);
-  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, exclusive_offer_accepted_at: "2026-08-12T11:00:00.000Z" }, "dale"), false);
-  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, paid: 1 }, "dale"), false);
-  assert.match(indexSource, /shouldActivateExclusiveOffer\(contact, userMessage\)/);
-  assert.match(indexSource, /acceptExclusiveOfferResponse\(phoneNumber\)/);
-  assert.match(indexSource, /const finalAt = markExclusiveAliasSent\(phoneNumber\)/);
+test("runtime sends the $9.999 offer directly at 23h and schedules the $6.999 final discount", () => {
+  const awaiting = {
+    paid: 0,
+    handoff: 0,
+    reminder2_sent_at: "2026-08-12T10:00:00.000Z",
+    exclusive_offer_text_sent: 0,
+    exclusive_alias_note_sent: 0,
+    exclusive_alias_sent: 0,
+  };
+  assert.equal(shouldActivateExclusiveOffer(awaiting), true);
+  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, reminder2_sent_at: null }), false);
+  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, paid: 1 }), false);
+  assert.equal(shouldActivateExclusiveOffer({ ...awaiting, exclusive_offer_text_sent: 1, exclusive_alias_note_sent: 1, exclusive_alias_sent: 1 }), false);
+  assert.match(indexSource, /shouldActivateExclusiveOffer\(contact\)/);
+  assert.doesNotMatch(indexSource, /acceptExclusiveOfferResponse/);
+  assert.match(indexSource, /const finalAt = markExclusiveAliasSent\(contact\.phone_number\)/);
   assert.doesNotMatch(indexSource, /isExclusiveOfferOk/);
   assert.match(indexSource, /getSetting\("exclusive_offer_text"/);
-  assert.match(indexSource, /markExclusiveOfferTextSent\(phoneNumber\)/);
-  assert.match(indexSource, /markExclusiveAliasNoteSent\(phoneNumber\)/);
-  assert.match(indexSource, /markExclusiveAliasSent\(phoneNumber\)/);
+  assert.match(indexSource, /markExclusiveOfferTextSent\(contact\.phone_number\)/);
+  assert.match(indexSource, /markExclusiveAliasNoteSent\(contact\.phone_number\)/);
+  assert.match(indexSource, /markExclusiveAliasSent\(contact\.phone_number\)/);
+  assert.match(indexSource, /offerSettingKey: "reminder2_offer_text"/);
+  assert.match(indexSource, /Direct \$9\.999 offer sent at 23h/);
+  assert.match(indexSource, /exclusive-offers\/backfill/);
   assert.match(indexSource, /processDueFinalDiscounts/);
   assert.match(indexSource, /getSetting\("final_discount_text"/);
   assert.match(indexSource, /contact\.exclusive_alias_sent/);
@@ -82,7 +89,7 @@ test("a concurrent message waits for the claimed batch and retries it after fail
 });
 
 test("an emoji-only response advances a pending second batch", () => {
-  assert.match(indexSource, /isEmojiOnly\(userMessage\) && !secondBatchPending && !awaitingExclusiveOfferResponse && !exclusiveOfferPending/);
+  assert.match(indexSource, /isEmojiOnly\(userMessage\) && !secondBatchPending && !exclusiveOfferPending/);
 });
 
 test("Fantasia media files are provider-safe", () => {
